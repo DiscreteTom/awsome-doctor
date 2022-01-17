@@ -1,0 +1,275 @@
+title: Target group health check failed.
+data:
+  tgName: ''
+  lbSgs: []
+  lbArn: ''
+  lbName: ''
+  healthCheckPort: 80
+  unhealthyTargets: []
+  tgArn: ''
+input:
+  - label: Target group name
+    placeholder: ''
+    store: tgName
+  - label: Load balancer name
+    placeholder: ''
+    store: lbName
+steps:
+  - name: Retrieve load balancer info.
+    js: |
+      let res;
+      try {
+        res = await $.aws.elbv2.describeLoadBalancers({ Names: [$.data.lbName] });
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      let lb = res.LoadBalancers[0];
+      let type = lb.Type;
+      $.data.lbSgs = lb.SecurityGroups;
+      $.data.lbArn = lb.LoadBalancerArn;
+
+      $.ok = `/md
+      - Security groups: \`${$.data.lbSgs.join(", ")}\`.
+      - ARN: \`${$.data.lbArn}\`. 
+      - Type: \`${type}\`.
+      `;
+  - name: Retrieve target group info.
+    js: |
+      let res;
+      try {
+        res = await $.aws.elbv2.describeTargetGroups({ Names: [$.data.tgName] });
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      let tg = res.TargetGroups[0];
+
+      if (tg.LoadBalancerArns.indexOf($.data.lbArn) == -1) {
+        $.err = `Target group '${$.data.tgName}' is not associated with the load balancer '${$.data.lbName}'`;
+        return;
+      }
+      if (!tg.HealthCheckEnabled) {
+        $.err = `Health check is not enabled for target group '${$.data.tgName}'`;
+        return;
+      }
+      if (tg.TargetType !== "instance") {
+        $.err = `Currently the target type ${tg.TargetType} is not supported.`;
+        return;
+      }
+
+      $.data.tgArn = tg.TargetGroupArn;
+      $.data.healthCheckPort = tg.HealthCheckPort;
+
+      $.info = `/md
+      - Protocol: \`${tg.Protocol}\`
+        - Version: \`${tg.ProtocolVersion}\`
+      - Load balancer listen port: \`${tg.Port}\`
+      - Target type: \`${tg.TargetType}\`
+      - Health check
+        - Enabled: \`${tg.HealthCheckEnabled}\`
+        - Protocol: \`${tg.HealthCheckProtocol}\`
+        - Port: \`${$.data.healthCheckPort}\`
+        - Path: \`${tg.HealthCheckPath}\`
+        - Success codes: \`${tg.Matcher.HttpCode || tg.Matcher.GrpcCode}\`
+      - Arn: \`${$.data.tgArn}\`
+      `;
+  - name: Retrieve unhealthy targets.
+    js: |
+      let res;
+      try {
+        res = await $.aws.elbv2.describeTargetHealth({
+          TargetGroupArn: $.data.tgArn,
+        });
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      if (res.TargetHealthDescriptions.length === 0) {
+        $.info = `No targets in the target group '${$.data.tgName}'. `;
+        $.stop = true;
+        return;
+      }
+
+      $.data.unhealthyTargets = $.jp.query(
+        res,
+        "$.TargetHealthDescriptions[?(@.TargetHealth.State == 'unhealthy')]"
+      );
+
+      // not unhealthy and not healthy
+      let otherTargets = $.jp.query(
+        res,
+        "$.TargetHealthDescriptions[?(@.TargetHealth.State != 'unhealthy' && @.TargetHealth.State != 'healthy')]"
+      );
+
+      if ($.data.unhealthyTargets.length === 0) {
+        if (otherTargets.length === 0) {
+          $.ok = "All targets are healthy.";
+        } else {
+          $.info += `Those targets are not in 'unhealthy' state and not in 'healthy' state, ignored: `;
+          otherTargets
+            .map((t) => {
+              $.info += `${t.Target.Id} (${t.TargetHealth.State})`;
+            })
+            .join(", ");
+          $.info += `. `;
+        }
+        $.stop = true;
+        return;
+      }
+
+      $.info = `/md
+      ### Unhealthy Targets
+      `;
+      $.data.unhealthyTargets.map((t) => {
+        $.info += `
+      - Instance ID: \`${t.Target.Id}\`
+        - Traffic port: \`${t.Target.Port}\`
+        - Health check port: \`${t.HealthCheckPort}\`
+        - Unhealthy reason: \`${t.TargetHealth.Reason}\`
+        - Unhealthy description: ${t.TargetHealth.Description}
+        `;
+      });
+  - name: Check unhealthy targets security groups' inbound rules.
+    js: |
+      let sgInfo = [];
+
+      for (let i = 0; i < $.data.unhealthyTargets.length; ++i) {
+        let t = $.data.unhealthyTargets[i];
+
+        let result = await $.utils.securityGroup.checkEC2Instances({
+          $,
+          instanceIds: [t.Target.Id],
+          direction: "in",
+          protocol: "tcp",
+          port: t.HealthCheckPort,
+        });
+
+        if (result.err) {
+          $.err = result.err;
+          return;
+        }
+
+        // any traffic allowed
+        if (result.anyTrafficPeer.type == "any" || result.portPeer.type == "any") {
+          continue;
+        }
+
+        // targets allow load balancer's security group
+        let peerSgs = await $.utils.securityGroup.getPortPeerSecurityGroup({
+          $,
+          res: result.res,
+          direction: "in",
+          protocol: "tcp",
+          port: t.HealthCheckPort,
+        });
+        if (peerSgs.filter((sg) => $.data.lbSgs.includes(sg)).length !== 0) {
+          continue;
+        }
+
+        if (result.portPeer.type == "no" && result.anyTrafficPeer.type == "no") {
+          $.err += `No IP is allowed to access target \`${t.Target.Id}\` at port ${t.HealthCheckPort}, please fix your security group inbound rules. `;
+          $.err += `Security group ids: ${result.securityGroupIds.join(", ")}`;
+          return;
+        }
+
+        if (result.anyTrafficPeer.type == "cidr") {
+          sgInfo.push({
+            cidr: result.anyTrafficPeer.cidr,
+            target: t.Target.Id,
+            sg: res.securityGroupIds,
+            type: "any-traffic",
+          });
+        }
+        if (result.portPeer.type == "cidr") {
+          sgInfo.push({
+            cidr: result.anyTrafficPeer.cidr,
+            target: t.Target.Id,
+            sg: res.securityGroupIds,
+            type: "specific-port",
+          });
+        }
+      }
+
+      if (sgInfo.length !== 0) {
+        $.info = `/md\n`;
+        for (let i = 0; i < sgInfo.length; ++i) {
+          if (sgInfo[i].type == "any-traffic") {
+            $.info += `- Instance \`${
+              sgInfo[i].target
+            }\` with security groups \`${sgInfo[i].sg.join(
+              ", "
+            )}\` allows any traffic from \`${sgInfo[i].cidr.join(", ")}\`\n`;
+          } else {
+            $.info += `- Instance \`${
+              sgInfo[i].target
+            }\` with security groups \`${sgInfo[i].sg.join(
+              ", "
+            )}\` allows health check traffic from \`${sgInfo[i].cidr.join(", ")}\`\n`;
+          }
+        }
+      } else {
+        $.ok = `Targets' security groups are correct.`;
+      }
+  - name: Check load balancer security groups' outbound rules.
+    js: |
+      // check `all traffic` rules
+      let result = await $.utils.securityGroup.checkPort({
+        $,
+        direction: "out",
+        securityGroupIds: $.data.lbSgs,
+        protocol: "tcp",
+        port: 22, // a random port
+      });
+
+      if (result.err) {
+        $.err = result.err;
+        return;
+      }
+
+      if (result.anyTrafficPeer.type == "any") {
+        $.ok = "All traffic to 0.0.0.0/0 are allowed.";
+        return;
+      } else if (result.anyTrafficPeer.type == "cidr") {
+        $.info += `All traffic to those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
+          ", "
+        )}. `;
+      }
+
+      // check targets health check ports
+      let hcPorts = $.data.unhealthyTargets.map((t) => t.HealthCheckPort);
+      let ports = [...new Set(hcPorts)]; // deduplicate
+
+      for (let i = 0; i < ports.length; ++i) {
+        let port = ports[i];
+
+        let result = await $.utils.securityGroup.checkPort({
+          $,
+          direction: "out",
+          securityGroupIds: $.data.lbSgs,
+          protocol: "tcp",
+          port,
+        });
+
+        if (result.err) {
+          $.err = result.err;
+          return;
+        }
+
+        if (result.portPeer.type == "no") {
+          $.err += `No IP is allowed outbound from the load balancer using tcp at port ${port}, please fix your security group outbound rules. `;
+          $.err += `Security group ids: ${$.data.lbSgs.join(", ")}. `;
+          return;
+        }
+
+        if (result.portPeer.type == "cidr") {
+          $.info += `Traffic to port ${port} are allowed to those CIDRs: ${result.portPeer.cidr.join(
+            ", "
+          )}. `;
+        }
+      }
+
+      $.ok = `Load balancer's security groups are correct.`;

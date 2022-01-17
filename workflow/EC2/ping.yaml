@@ -1,0 +1,193 @@
+title: Can't ping EC2 instance from the Internet.
+data:
+  instanceId: ''
+  securityGroupIds: []
+  vpcId: ''
+  subnetId: ''
+input:
+  - label: Instance ID
+    placeholder: i-01234567891234567
+    store: instanceId
+steps:
+  - name: Instance status check.
+    js: |
+      try {
+        let res = await $.aws.ec2.describeInstanceStatus({
+          InstanceIds: [$.data.instanceId],
+        });
+
+        if (res.InstanceStatuses[0].InstanceState.Name != "running") {
+          $.err = `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `;
+          return;
+        } else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok") {
+          $.err = `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `;
+          return;
+        } else if (res.InstanceStatuses[0].SystemStatus.Status != "ok") {
+          $.err = `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `;
+          return;
+        }
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      $.ok = "Instance is running, all status check passed. ";
+  - name: Retrieve instance info, check public IP.
+    js: |
+      let res;
+      try {
+        res = await $.aws.ec2.describeInstances({ InstanceIds: [$.data.instanceId] });
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      let publicIps = $.jp.query(res, "$..PrivateIpAddresses..PublicIp");
+      if (publicIps.length === 0) {
+        $.err = "No public IP is associated to this instance.";
+        return;
+      }
+      $.ok += `Public IP address: ${publicIps.join(", ")}. `;
+
+      $.data.securityGroupIds = $.jp.query(res, "$..SecurityGroups[*].GroupId");
+      $.data.vpcId = $.jp.query(res, "$..VpcId")[0];
+      $.data.subnetId = $.jp.query(res, "$..SubnetId")[0];
+
+      if ($.data.securityGroupIds.length !== 0) {
+        $.ok += `Security groups: ${$.data.securityGroupIds.join(", ")}. `;
+      } else {
+        $.err +=
+          "No security groups associated with this instance, which is abnormal. ";
+      }
+      if ($.data.vpcId && $.data.subnetId) {
+        $.ok += `VPC=${$.data.vpcId}, subnet=${$.data.subnetId}. `;
+      } else {
+        $.err += "Failed to retrieve VPC id and subnet id. ";
+      }
+  - name: Check security group inbound rules.
+    js: |
+      let result = await $.utils.securityGroup.checkPort({
+        $,
+        direction: "in",
+        securityGroupIds: $.data.securityGroupIds,
+        protocol: "icmp",
+        port: 8, // echo request
+      });
+
+      if (result.err) {
+        $.err = result.err;
+        return;
+      }
+
+      if (result.portPeer.type == "no" && result.anyTrafficPeer.type == "no") {
+        $.err +=
+          "No IP is allowed to ping this instance, please fix your security group inbound rules. ";
+        $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
+        return;
+      }
+
+      if (result.anyTrafficPeer.type == "any") {
+        $.ok = "All traffic from 0.0.0.0/0 are allowed.";
+        return;
+      } else if (result.anyTrafficPeer.type == "cidr") {
+        $.info += `All traffic from those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
+          ", "
+        )}. `;
+      }
+
+      if (result.portPeer.type == "any") {
+        $.ok = "Ping is allowed from 0.0.0.0/0";
+        return;
+      } else if (result.portPeer.type == "cidr") {
+        $.info += `Ping is allowed from those CIDRs: ${result.portPeer.cidr.join(
+          ", "
+        )}. `;
+      }
+  - name: Check route table.
+    js: |-
+      let res = await $.utils.vpc.checkSubnetIgw({
+        $,
+        subnetId: $.data.subnetId,
+        vpcId: $.data.vpcId,
+      });
+
+      if (res.err) {
+        $.err = err;
+        return;
+      }
+
+      if (res.type == "no") {
+        $.err = `Subnet ${$.data.subnetId} is not public. `;
+        return;
+      }
+
+      if (res.type == "any") {
+        $.ok = `0.0.0.0/0 will be route to an Internet Gateway`;
+      } else if (res.type == "cidr") {
+        $.info += `Those CIDR blocks will be route to an Internet Gateway: ${res.cidr.join(
+          ", "
+        )}. `;
+      }
+  - name: Check network ACL.
+    js: |
+      let inboundRules = [];
+      let outboundRules = [];
+      try {
+        let res = await $.aws.ec2.describeNetworkAcls({
+          Filters: [{ Name: "association.subnet-id", Values: [$.data.subnetId] }],
+        });
+        inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
+        outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
+      } catch (e) {
+        $.err = e;
+        return;
+      }
+
+      // sort rules by rule number ascent
+      inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
+      outboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
+
+      if (inboundRules.length === 0) {
+        $.err = "No inbound rules found.";
+        return;
+      }
+      if (outboundRules.length === 0) {
+        $.err = "No outbound rules found.";
+        return;
+      }
+
+      // use the first rule
+      let rIn = inboundRules[0];
+      let rOut = outboundRules[0];
+      let inNotModified = false;
+      let outNotModified = false;
+
+      if (
+        rIn.Protocol == "-1" &&
+        rIn.RuleAction == "allow" &&
+        rIn.CidrBlock == "0.0.0.0/0"
+      ) {
+        inNotModified = true;
+      }
+      if (
+        rOut.Protocol == "-1" &&
+        rOut.RuleAction == "allow" &&
+        rOut.CidrBlock == "0.0.0.0/0"
+      ) {
+        outNotModified = true;
+      }
+
+      if (inNotModified) {
+        if (outNotModified) {
+          $.ok += "All traffics are allowed. ";
+          return;
+        } else {
+          $.info += `Outbound ACLs are modified. Rules: ${outboundRules}. `;
+        }
+      } else {
+        if (outNotModified) {
+          $.info += `Inbound ACLs are modified. Rules: ${inboundRules}. `;
+        } else {
+          $.info += `Inbound & Outbound ACLs are modified. Inbound rules: ${inboundRules}. Outbound rules: ${outboundRules}. `;
+        }
+      }
