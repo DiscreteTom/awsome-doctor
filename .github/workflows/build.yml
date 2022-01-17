@@ -49,7 +49,7 @@ jobs:
       - name: install & generate
         run: |
           cp -r content/* awsome-doctor-view
-          cd view
+          cd awsome-doctor-view
           yarn install
           yarn generate
 
