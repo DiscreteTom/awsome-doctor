@@ -2,8 +2,6 @@
 
 A browser-based tool that helps you to trouble shoot your AWS environment.
 
-> This repo only contains the content of workflows in Awsome Doctor. For frontend code, see [awsome-doctor-view](https://github.com/DiscreteTom/awsome-doctor-view).
-
 ## Features
 
 - [YAML](https://yaml.org/) format workflow file.
@@ -224,3 +222,10 @@ let config = {
 // create your own service client with upper case service names
 let ec2 = new $.aws.EC2(config);
 ```
+
+## Related Projects
+
+- [awsome-doctor](https://github.com/DiscreteTom/awsome-doctor): A browser based AWS troubleshooting tool.
+- [awsome-doctor-cli](https://github.com/DiscreteTom/awsome-doctor-cli): Command line interface version of Awsome Doctor.
+- [awsome-doctor-view](https://github.com/DiscreteTom/awsome-doctor-view): Frontend code of Awsome Doctor.
+- [awsome-doctor-core](https://github.com/DiscreteTom/awsome-doctor-core): Workflow executor, plugins and util functions of Awsome Doctor.
