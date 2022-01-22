@@ -104,7 +104,7 @@ let $ = {
   info: "",
   ok: "",
 
-  // util functions in `src/workflow-utils/` folder
+  // util functions in https://github.com/DiscreteTom/awsome-doctor-core/tree/main/utils
   utils: { ... },
 
   // stop executing remaining steps
@@ -135,7 +135,7 @@ $.info += "info";
 $.ok += "ok";
 
 // use util functions
-await $.utils.securityGroup.checkEC2Instances({
+await $.utils.sg.checkEC2Instances({
   $,
   instanceIds: ['i-1234567890']
   direction: "in",
@@ -153,7 +153,7 @@ $.stop = true;
 - `info` means users need to check the output **manually**.
 - `err` means there **must** be something wrong.
 
-The output is rendered using `result.err || result.info || result.ok`, which means if your `$.err` is not empty, the output will not contain `$.info` and `$.ok`.
+The output is rendered using `result.err || result.ok || result.info`, which means if your `$.err` is not empty, the output will not contain `$.ok` and `$.info`.
 
 The output is rendered as Markdown if your output starts with `/md\n`:
 
@@ -187,8 +187,8 @@ There are some approaches to reuse external or 3rd party code:
 
 ```js
 // use standard util functions in `$.utils`
-// you can find those util functions in `src/workflow-utils/`
-$.utils.securityGroup.checkEC2Instances(...);
+// you can find those util functions in https://github.com/DiscreteTom/awsome-doctor-core/tree/main/utils
+$.utils.sg.checkEC2Instances(...);
 
 // use http request to retrieve 3rd party code
 eval(await $.axios.get("https://example.com"));
