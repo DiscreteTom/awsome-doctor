@@ -1,22 +1,22 @@
 title: A port is not accessible from the Internet.
-description: ''
+description: ""
 data:
-  instanceId: ''
+  instanceId: ""
   securityGroupIds: []
-  vpcId: ''
-  subnetId: ''
+  vpcId: ""
+  subnetId: ""
   port: 22
-  protocol: tcp
+  protocol: "tcp"
 input:
   - label: Instance ID
     placeholder: i-01234567891234567
     store: instanceId
-  - label: Port
-    placeholder: 0-65535
-    store: port
   - label: Protocol
     placeholder: tcp / udp / icmp
     store: protocol
+  - label: Port
+    placeholder: 0-65535
+    store: port
 steps:
   - name: Validate input.
     js: |
@@ -86,7 +86,7 @@ steps:
       }
   - name: Check security group inbound rules.
     js: |
-      let result = await $.utils.securityGroup.checkPort({
+      let result = await $.utils.sg.checkPort({
         $,
         direction: "in",
         securityGroupIds: $.data.securityGroupIds,
@@ -99,30 +99,36 @@ steps:
         return;
       }
 
-      if (result.portPeer.type == "no" && result.anyTrafficPeer.type == "no") {
-        $.err += `No IP is allowed to access this instance using ${$.data.protocol} at port ${$.data.port}, please fix your security group inbound rules. `;
+      if (result.anyTrafficPeer.no && result.peer.no) {
+        $.err += `No IP is allowed to access this instance using ${$.data.protocol} at ${$.data.port}, please fix your security group inbound rules. `;
         $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
         return;
       }
 
-      if (result.anyTrafficPeer.type == "any") {
-        $.ok = "All traffic from 0.0.0.0/0 are allowed.";
+      if (result.anyTrafficPeer.any) {
+        $.ok = "All traffic allowed from 0.0.0.0/0.";
         return;
-      } else if (result.anyTrafficPeer.type == "cidr") {
+      } else if (result.anyTrafficPeer.cidr.length !== 0) {
         $.info += `All traffic from those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
           ", "
         )}. `;
       }
 
-      if (result.portPeer.type == "any") {
+      if (result.peer.any) {
         $.ok = "Traffic is allowed from 0.0.0.0/0";
         return;
-      } else if (result.portPeer.type == "cidr") {
-        $.info += `Traffic is allowed from those CIDRs: ${result.portPeer.cidr.join(
+      } else if (result.peer.cidr.length !== 0) {
+        $.info += `Traffic is allowed from those CIDRs: ${result.peer.cidr.join(
           ", "
         )}. `;
       }
-  - name: Check route table.
+
+      if ($.info === "") {
+        $.err += `No IP is allowed to access this instance using ${$.data.protocol} at ${$.data.port}, please fix your security group inbound rules. `;
+        $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
+        return;
+      }
+  - name: Check route table Internet Gateway.
     js: |
       let res = await $.utils.vpc.checkSubnetIgw({
         $,

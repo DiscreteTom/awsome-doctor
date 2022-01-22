@@ -1,5 +1,5 @@
 title: Can't ping EC2 instance from the Internet.
-description: ''
+description: '### Markdown Here'
 data:
   instanceId: ''
   securityGroupIds: []
@@ -67,7 +67,7 @@ steps:
       }
   - name: Check security group inbound rules.
     js: |
-      let result = await $.utils.securityGroup.checkPort({
+      let result = await $.utils.sg.checkPort({
         $,
         direction: "in",
         securityGroupIds: $.data.securityGroupIds,
@@ -80,36 +80,38 @@ steps:
         return;
       }
 
-      if (
-        result.portPeer &&
-        result.portPeer.type == "no" &&
-        result.anyTrafficPeer &&
-        result.anyTrafficPeer.type == "no"
-      ) {
+      if (result.anyTrafficPeer.no && result.peer.no) {
         $.err +=
           "No IP is allowed to ping this instance, please fix your security group inbound rules. ";
         $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
         return;
       }
 
-      if (result.anyTrafficPeer.type == "any") {
-        $.ok = "All traffic from 0.0.0.0/0 are allowed.";
+      if (result.anyTrafficPeer.any) {
+        $.ok = "All traffic allowed from 0.0.0.0/0.";
         return;
-      } else if (result.anyTrafficPeer.type == "cidr") {
+      } else if (result.anyTrafficPeer.cidr.length !== 0) {
         $.info += `All traffic from those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
           ", "
         )}. `;
       }
 
-      if (result.portPeer.type == "any") {
+      if (result.peer.any) {
         $.ok = "Ping is allowed from 0.0.0.0/0";
         return;
-      } else if (result.portPeer.type == "cidr") {
-        $.info += `Ping is allowed from those CIDRs: ${result.portPeer.cidr.join(
+      } else if (result.peer.cidr.length !== 0) {
+        $.info += `Ping is allowed from those CIDRs: ${result.peer.cidr.join(
           ", "
         )}. `;
       }
-  - name: Check route table.
+
+      if ($.info === "") {
+        $.err +=
+          "No IP is allowed to ping this instance, please fix your security group inbound rules. ";
+        $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
+        return;
+      }
+  - name: Check route table Internet Gateway.
     js: |
       let res = await $.utils.vpc.checkSubnetIgw({
         $,
