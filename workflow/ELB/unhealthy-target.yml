@@ -1,4 +1,5 @@
 title: Target group health check failed.
+description: ''
 data:
   tgName: ''
   lbSgs: []
@@ -140,7 +141,7 @@ steps:
       for (let i = 0; i < $.data.unhealthyTargets.length; ++i) {
         let t = $.data.unhealthyTargets[i];
 
-        let result = await $.utils.securityGroup.checkEC2Instances({
+        let result = await $.utils.sg.checkEC2Instances({
           $,
           instanceIds: [t.Target.Id],
           direction: "in",
@@ -153,30 +154,28 @@ steps:
           return;
         }
 
-        // any traffic allowed
-        if (result.anyTrafficPeer.type == "any" || result.portPeer.type == "any") {
+        // traffic allowed from any source
+        if (result.anyTrafficPeer.any || result.peer.any) {
+          // skip this instance
+          continue;
+        }
+        // traffic allowed from lb's security group
+        if (
+          result.anyTrafficPeer.sg.filter((sg) => $.data.lbSgs.includes(sg))
+            .length !== 0 ||
+          result.peer.sg.filter((sg) => $.data.lbSgs.includes(sg))
+        ) {
           continue;
         }
 
-        // targets allow load balancer's security group
-        let peerSgs = await $.utils.securityGroup.getPortPeerSecurityGroup({
-          $,
-          res: result.res,
-          direction: "in",
-          protocol: "tcp",
-          port: t.HealthCheckPort,
-        });
-        if (peerSgs.filter((sg) => $.data.lbSgs.includes(sg)).length !== 0) {
-          continue;
-        }
-
-        if (result.portPeer.type == "no" && result.anyTrafficPeer.type == "no") {
+        if (result.peer.no && result.anyTrafficPeer.no) {
           $.err += `No IP is allowed to access target \`${t.Target.Id}\` at port ${t.HealthCheckPort}, please fix your security group inbound rules. `;
           $.err += `Security group ids: ${result.securityGroupIds.join(", ")}`;
           return;
         }
 
-        if (result.anyTrafficPeer.type == "cidr") {
+        // gather cidr info
+        if (result.anyTrafficPeer.cidr.length !== 0) {
           sgInfo.push({
             cidr: result.anyTrafficPeer.cidr,
             target: t.Target.Id,
@@ -184,9 +183,9 @@ steps:
             type: "any-traffic",
           });
         }
-        if (result.portPeer.type == "cidr") {
+        if (result.peer.cidr.length !== 0) {
           sgInfo.push({
-            cidr: result.anyTrafficPeer.cidr,
+            cidr: result.peer.cidr,
             target: t.Target.Id,
             sg: res.securityGroupIds,
             type: "specific-port",
@@ -217,7 +216,7 @@ steps:
   - name: Check load balancer security groups' outbound rules.
     js: |
       // check `all traffic` rules
-      let result = await $.utils.securityGroup.checkPort({
+      let result = await $.utils.sg.checkPort({
         $,
         direction: "out",
         securityGroupIds: $.data.lbSgs,
@@ -230,10 +229,10 @@ steps:
         return;
       }
 
-      if (result.anyTrafficPeer.type == "any") {
+      if (result.anyTrafficPeer.any) {
         $.ok = "All traffic to 0.0.0.0/0 are allowed.";
         return;
-      } else if (result.anyTrafficPeer.type == "cidr") {
+      } else if (result.anyTrafficPeer.cidr.length !== 0) {
         $.info += `All traffic to those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
           ", "
         )}. `;
@@ -246,7 +245,7 @@ steps:
       for (let i = 0; i < ports.length; ++i) {
         let port = ports[i];
 
-        let result = await $.utils.securityGroup.checkPort({
+        let result = await $.utils.sg.checkPort({
           $,
           direction: "out",
           securityGroupIds: $.data.lbSgs,
@@ -259,13 +258,13 @@ steps:
           return;
         }
 
-        if (result.portPeer.type == "no") {
+        if (result.peer.no) {
           $.err += `No IP is allowed outbound from the load balancer using tcp at port ${port}, please fix your security group outbound rules. `;
           $.err += `Security group ids: ${$.data.lbSgs.join(", ")}. `;
           return;
         }
 
-        if (result.portPeer.type == "cidr") {
+        if (result.peer.cidr.length !== 0) {
           $.info += `Traffic to port ${port} are allowed to those CIDRs: ${result.portPeer.cidr.join(
             ", "
           )}. `;
