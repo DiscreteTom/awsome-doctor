@@ -44,28 +44,35 @@ steps:
 
 ### Eval the Code
 
-The `js` code in steps is a JavaScript async function body. The content will be run by:
+The `js` code in steps is a JavaScript async function body wrapped by a `try-catch` block. The content will be run by:
 
 ```js
-await eval(`
-  (async () => {
-    ${step.js}
-  })()
-`);
-```
-
-Which means you can use `return` to stop running, and use `await` inside the code block:
-
-```js
-let res;
 try {
-  // call async function
-  res = await $.aws.ec2.describeInstanceStatus({});
+  await eval(`
+    (async () => {
+      ${step.js}
+    })()
+  `);
 } catch (e) {
   $.err = e;
-  // stop running current step
-  return;
 }
+```
+
+Which means you can:
+
+- Use `return` to stop running the current step.
+- Use `await` inside the code block.
+- Throw exceptions, or ignore exceptions if you don't plan to handle them.
+
+Examples:
+
+```js
+// call async function
+// and ignore exceptions since we don't plan to handle them
+let res = await $.aws.ec2.describeInstanceStatus({});
+
+if ( ... ) return; // stop running the current step
+
 // process res
 // ...
 ```
