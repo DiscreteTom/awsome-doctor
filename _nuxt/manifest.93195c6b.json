@@ -1,0 +1,11 @@
+{
+  "name": "Awsome Doctor",
+  "short_name": "awsome-doctor-view",
+  "description": "A browser-based tool that helps you to trouble shoot your AWS environment.",
+  "icons": [],
+  "start_url": "/awsome-doctor/?standalone=true",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#181818",
+  "lang": "en"
+}
