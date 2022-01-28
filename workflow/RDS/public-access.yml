@@ -1,5 +1,17 @@
 title: Can't access RDS instance from the Internet.
-description: ''
+description: >-
+  Exposing databases to the Internet is <span style="color: red;">**NOT**</span>
+  recommended.
+
+
+  The following ways are prefered to connect to your databases:
+
+
+  - Login to an EC2 instance in the same VPC, and access your databases on that
+  EC2 instance.
+
+  - Setup an SSH tunnel(SSH port forwarding) to connect to your databases
+  through an EC2 instance.
 data:
   dbIdentifier: ''
   securityGroupIds: []
@@ -16,14 +28,10 @@ steps:
       let res = await $.aws.rds.describeDBInstances({
         DBInstanceIdentifier: $.data.dbIdentifier,
       });
-      if (res.DBInstances.length === 0) {
-        $.err = `Database ${$.data.dbIdentifier} not found. Please check the identifier, your AWS profile, and the selected region. `;
-        return;
-      }
 
-      $.data.port = $.jp.query(res, "$..Port")[0];
       let username = $.jp.query(res, "$..MasterUsername")[0];
       let publiclyAccessible = $.jp.query(res, "$..PubliclyAccessible")[0];
+      $.data.port = $.jp.query(res, "$..Port")[0];
       $.data.securityGroupIds = $.jp.query(
         res,
         "$..VpcSecurityGroups[?(@.Status=='active')].VpcSecurityGroupId"
@@ -35,18 +43,23 @@ steps:
       $.data.vpc = $.jp.query(res, "$..VpcId")[0];
 
       if (!publiclyAccessible) {
-        $.err = `Database is not public accessible. Please modify your database to enable "Public access" `;
-        return;
+        $.panic(
+          `Database is not public accessible. Please modify your database to enable "Public access".`
+        );
       }
 
-      $.ok = `Got database username: ${username}, port: ${
-        $.data.port
-      }, active security groups: ${$.data.securityGroupIds.join(
-        ", "
-      )}, active subnets: ${$.data.subnets.join(", ")}, vpc: ${$.data.vpc} `;
-  - name: Check subnets' route table.
+      $.done(`/md
+      - Database username: ${username}
+      - Port: ${$.data.port}
+      - Active security groups: ${$.data.securityGroupIds.join(", ")}
+      - Active subnets: ${$.data.subnets.join(", ")}
+      - VPC: ${$.data.vpc}
+      `);
+  - name: Check subnets' route table Internet Gateway.
     js: |
-      for (let i = 0; i < $.data.subnets[i]; ++i) {
+      let result = {};
+
+      $.data.subnets.map((subnet) => {
         let res = await $.utils.vpc.checkSubnetIgw({
           $,
           subnetId: subnet,
@@ -54,18 +67,21 @@ steps:
         });
 
         if (res.type == "no") {
-          $.err = `Subnet ${subnet} is not public. `;
-          return;
+          $.panic(`Subnet ${subnet} is not public.`);
         }
 
         if (res.type == "cidr") {
-          $.info += `For subnet ${subnet}, those CIDR blocks will be route to an Internet Gateway: ${res.cidr.join(
-            ", "
-          )}. `;
+          result[subnet] = res.cidr;
         }
+      });
+
+      for (let subnet in result) {
+        $.info += `For subnet ${subnet}, those CIDR blocks will be route to an Internet Gateway: ${result[
+          subnet
+        ].join(", ")}. `;
       }
 
-      $.ok = `All subnets are public. `;
+      if ($.info === "") $.ok = `All subnets are public.`;
   - name: Check security groups' inbound rules.
     js: |
       let result = await $.utils.sg.checkPort({
@@ -77,15 +93,13 @@ steps:
       });
 
       if (result.peer.no && result.anyTrafficPeer.no) {
-        $.err +=
-          "No IP is allowed to access this database, please fix your security group inbound rules. ";
+        $.err += `No IP is allowed to access this database at port ${$.data.port}, please fix your security group inbound rules. `;
         $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
         return;
       }
 
       if (result.anyTrafficPeer.any) {
-        $.ok = "All traffic from 0.0.0.0/0 are allowed.";
-        return;
+        $.done("All traffic from 0.0.0.0/0 are allowed.");
       } else if (result.anyTrafficPeer.cidr.length !== 0) {
         $.info += `All traffic from those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
           ", "
@@ -93,74 +107,79 @@ steps:
       }
 
       if (result.peer.any) {
-        $.ok = "Traffic is allowed from 0.0.0.0/0";
-        return;
-      } else if (result.peer.any) {
+        $.done("Traffic is allowed from 0.0.0.0/0.");
+      } else if (result.peer.cidr.length !== 0) {
         $.info += `Traffic is allowed from those CIDRs: ${result.portPeer.cidr.join(
           ", "
         )}. `;
       }
+
+      if ($.info === "") {
+        $.err += `No IP is allowed to access this database at port ${$.data.port}, please fix your security group inbound rules. `;
+        $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
+        return;
+      }
   - name: Check network ACL.
     js: |
-      let inboundRules = [];
-      let outboundRules = [];
+      let result = {};
 
-      for (let i = 0; i < $.data.subnets.length; ++i) {
-        let subnet = $.data.subnets[i];
+      let stringifyRules = (rules) => {
+        let ret = "";
+        rules.map(
+          (r) =>
+            (ret += `- ${r.allow ? "allow" : "deny"} ${r.cidr}, rule number=${
+              r.number != 32767 ? r.number : "*"
+            }\n`)
+        );
+        return ret;
+      };
 
-        let res = await $.aws.ec2.describeNetworkAcls({
-          Filters: [{ Name: "association.subnet-id", Values: [subnet] }],
+      $.data.subnets.map((subnet) => {
+        let inbound = await $.utils.vpc.checkSubnetNacl({
+          $,
+          subnetId: subnet,
+          direction: "in",
+          protocol: "tcp",
+          port: $.data.port,
         });
-        inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
-        outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
+        let outbound = await $.utils.vpc.checkSubnetNacl({
+          $,
+          subnetId: $.data.subnetId,
+          direction: "out",
+          protocol: "tcp",
+          port: $.data.port,
+        });
 
-        // sort rules by rule number ascent
-        inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
-        outboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
-
-        if (inboundRules.length === 0) {
-          $.err = `No inbound rules found for subnet ${subnet}.`;
+        if (inbound.any && outbound.any) {
           return;
-        }
-        if (outboundRules.length === 0) {
-          $.err = `No outbound rules found for subnet ${subnet}.`;
-          return;
-        }
-
-        // use the first rule
-        let rIn = inboundRules[0];
-        let rOut = outboundRules[0];
-        let inNotModified = false;
-        let outNotModified = false;
-
-        if (
-          rIn.Protocol == "-1" &&
-          rIn.RuleAction == "allow" &&
-          rIn.CidrBlock == "0.0.0.0/0"
-        ) {
-          inNotModified = true;
-        }
-        if (
-          rOut.Protocol == "-1" &&
-          rOut.RuleAction == "allow" &&
-          rOut.CidrBlock == "0.0.0.0/0"
-        ) {
-          outNotModified = true;
-        }
-
-        if (inNotModified) {
-          if (!outNotModified) {
-            $.info += `Outbound ACLs are modified. Rules: ${outboundRules}. `;
-          }
         } else {
-          if (outNotModified) {
-            $.info += `Inbound ACLs are modified. Rules: ${inboundRules}. `;
-          } else {
-            $.info += `Inbound & Outbound ACLs are modified. Inbound rules: ${inboundRules}. Outbound rules: ${outboundRules}. `;
+          result[subnet] = {};
+
+          if (!inbound.any) {
+            result[subnet].in = inbound.rule;
+          }
+
+          if (!outbound.any) {
+            result[subnet].out = outbound.rule;
           }
         }
-      }
+      });
 
-      if ($.info.length === 0) {
-        $.ok = "All traffics are allowed. ";
+      if (Object.keys(result).length === 0) {
+        $.done("All traffic allowed.");
+      } else {
+        $.info = `/md\n`;
+        for (let subnet in result) {
+          $.info += `### Subnet ${subnet}\n\n`;
+          if (result[subnet].in) {
+            $.info += "Related inbound rules:\n\n";
+            $.info += stringifyRules(result[subnet].in);
+            $.info += "\n\n";
+          }
+          if (result[subnet].out) {
+            $.info += "Related outbound rules:\n\n";
+            $.info += stringifyRules(result[subnet].out);
+            $.info += "\n\n";
+          }
+        }
       }

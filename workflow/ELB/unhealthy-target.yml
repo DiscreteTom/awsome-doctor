@@ -45,23 +45,21 @@ steps:
       let res = await $.aws.elbv2.describeTargetGroups({ Names: [$.data.tgName]
       });
 
-
       let tg = res.TargetGroups[0];
 
 
-      if (tg.LoadBalancerArns.indexOf($.data.lbArn) == -1) {
-        $.err = `Target group '${$.data.tgName}' is not associated with the load balancer '${$.data.lbName}'`;
-        return;
+      if (!tg.LoadBalancerArns.includes($.data.lbArn)) {
+        $.panic(
+          `Target group '${$.data.tgName}' is not associated with the load balancer '${$.data.lbName}'.`
+        );
       }
 
       if (!tg.HealthCheckEnabled) {
-        $.err = `Health check is not enabled for target group '${$.data.tgName}'`;
-        return;
+        $.panic(`Health check is not enabled for target group '${$.data.tgName}'.`);
       }
 
       if (tg.TargetType !== "instance") {
-        $.err = `Currently the target type ${tg.TargetType} is not supported.`;
-        return;
+        $.panic(`Currently the target type ${tg.TargetType} is not supported.`);
       }
 
 
@@ -112,7 +110,7 @@ steps:
 
       if ($.data.unhealthyTargets.length === 0) {
         if (otherTargets.length === 0) {
-          $.ok = "All targets are healthy.";
+          $.done("All targets are healthy.");
         } else {
           $.info += `Those targets are not in 'unhealthy' state and not in 'healthy' state, ignored: `;
           otherTargets
