@@ -121,57 +121,52 @@ steps:
       }
   - name: Check network ACL.
     js: |
-      let res = await $.aws.ec2.describeNetworkAcls({
-        Filters: [{ Name: "association.subnet-id", Values: [$.data.subnetId] }],
+      let inbound = await $.utils.vpc.checkSubnetNacl({
+        $,
+        subnetId: $.data.subnetId,
+        direction: "in",
+        protocol: $.data.protocol,
+        port: $.data.port,
       });
-      let inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
-      let outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
+      let outbound = await $.utils.vpc.checkSubnetNacl({
+        $,
+        subnetId: $.data.subnetId,
+        direction: "out",
+        protocol: $.data.protocol,
+        port: $.data.port,
+      });
 
-      // sort rules by rule number ascent
-      inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
-      outboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
+      let stringifyRules = (rules) => {
+        let result = "";
+        rules.map(
+          (r) =>
+            (result += `- ${r.allow ? "allow" : "deny"} ${r.cidr}, rule number=${
+              r.number != 32767 ? r.number : "*"
+            }\n`)
+        );
+        return result;
+      };
 
-      if (inboundRules.length === 0) {
-        $.err = "No inbound rules found.";
-        return;
-      }
-      if (outboundRules.length === 0) {
-        $.err = "No outbound rules found.";
-        return;
-      }
-
-      // use the first rule
-      let rIn = inboundRules[0];
-      let rOut = outboundRules[0];
-      let inNotModified = false;
-      let outNotModified = false;
-
-      if (
-        rIn.Protocol == "-1" &&
-        rIn.RuleAction == "allow" &&
-        rIn.CidrBlock == "0.0.0.0/0"
-      ) {
-        inNotModified = true;
-      }
-      if (
-        rOut.Protocol == "-1" &&
-        rOut.RuleAction == "allow" &&
-        rOut.CidrBlock == "0.0.0.0/0"
-      ) {
-        outNotModified = true;
-      }
-
-      if (inNotModified) {
-        if (outNotModified) {
-          $.ok += "All traffics are allowed. ";
-          return;
-        } else {
-          $.info += `Outbound ACLs are modified. Rules: ${outboundRules}. `;
-        }
+      if (inbound.any && outbound.any) {
+        $.done("All traffic allowed.");
       } else {
-        if (outNotModified) {
-          $.info += `Inbound ACLs are modified. Rules: ${inboundRules}. `;
+        $.info = "/md\n";
+
+        if (inbound.any) {
+          $.info += `All inbound traffic allowed.\n`;
         } else {
-          $.info += `Inbound & Outbound ACLs are modified. Inbound rules: ${inboundRules}. Outbound rules: ${outboundRules}. `;
+          $.info += `
+      Related inbound rules:
+      ${stringifyRules(inbound.rule)}
+      \n`;
+        }
+
+        if (outbound.any) {
+          $.info += `All outbound traffic allowed.\n`;
+        } else {
+          $.info += `
+      Related outbound rules:
+      ${stringifyRules(outbound.rule)}
+      \n`;
         }
       }
