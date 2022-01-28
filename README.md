@@ -110,6 +110,8 @@ let $ = {
   err: "",
   info: "",
   ok: "",
+  panic(msg){},
+  done(msg){},
 
   // util functions in https://github.com/DiscreteTom/awsome-doctor-core/tree/main/utils
   utils: { ... },
@@ -184,6 +186,16 @@ console.log(123);
 
 // use normal string
 $.ok = "/md\n# Markdown";
+```
+
+`$.panic(msg)`/`$.done(msg)` is a syntactic sugar for `$.err = msg; return;`/`$.ok = msg; return;`. `$.panic`/`$.done` will throw an exception with class `StepStopper`, which will stop the current step and be handled by the workflow executor properly.
+
+With `$.panic`/`$.done`, you can also stop your workflow in nested functions, e.g.:
+
+```js
+[0].map((e) => {
+  $.panic("msg");
+});
 ```
 
 ### Modularization
