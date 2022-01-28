@@ -24,20 +24,22 @@ steps:
         InstanceIds: [$.data.instanceId],
       });
 
-      if (res.InstanceStatuses[0].InstanceState.Name != "running")
-        $.panic(
-          `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `
-        );
-      else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok")
-        $.panic(
-          `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `
-        );
-      else if (res.InstanceStatuses[0].SystemStatus.Status != "ok")
-        $.panic(
-          `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `
-        );
+      let state = res.InstanceStatuses[0].InstanceState.Name;
+      if (state != "running") {
+        $.panic(`Instance is not running. Instance state: ${state}.`);
+      }
 
-      $.done("Instance is running, all status check passed. ");
+      let iStatus = res.InstanceStatuses[0].InstanceStatus.Status;
+      if (iStatus != "ok") {
+        $.panic(`Instance status check failed. Status: ${iStatus}.`);
+      }
+
+      let sStatus = res.InstanceStatuses[0].SystemStatus.Status;
+      if (sStatus != "ok") {
+        $.panic(`System status check failed. Status: ${sStatus}.`);
+      }
+
+      $.done("Instance is running, all status check passed.");
   - name: Retrieve instance info, check public IP.
     js: |
       let res = await $.aws.ec2.describeInstances({
@@ -49,23 +51,16 @@ steps:
         $.panic("No public IP is associated to this instance.");
       }
 
-      $.ok += `Public IP address: ${publicIps.join(", ")}. `;
-
       $.data.securityGroupIds = $.jp.query(res, "$..SecurityGroups[*].GroupId");
       $.data.vpcId = $.jp.query(res, "$..VpcId")[0];
       $.data.subnetId = $.jp.query(res, "$..SubnetId")[0];
 
-      if ($.data.securityGroupIds.length !== 0) {
-        $.ok += `Security groups: ${$.data.securityGroupIds.join(", ")}. `;
-      } else {
-        $.err +=
-          "No security groups associated with this instance, which is abnormal. ";
-      }
-      if ($.data.vpcId && $.data.subnetId) {
-        $.ok += `VPC=${$.data.vpcId}, subnet=${$.data.subnetId}. `;
-      } else {
-        $.err += "Failed to retrieve VPC id and subnet id. ";
-      }
+      $.done(`/md
+      - Public IP: ${publicIps.join(", ")}
+      - Security groups: ${$.data.securityGroupIds.join(", ")}
+      - VPC ID: ${$.data.vpcId}
+      - Subnet ID: ${$.data.subnetId}
+      `);
   - name: Check security group inbound rules.
     js: |
       let result = await $.utils.sg.checkPort({
@@ -77,14 +72,13 @@ steps:
       });
 
       if (result.anyTrafficPeer.no && result.peer.no) {
-        $.err += `No IP is allowed to access this instance using ${$.data.protocol} at ${$.data.port}, please fix your security group inbound rules. `;
+        $.err += `No IP is allowed to access this instance using protocol ${$.data.protocol} at port ${$.data.port}, please fix your security group inbound rules. `;
         $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
         return;
       }
 
       if (result.anyTrafficPeer.any) {
-        $.ok = "All traffic allowed from 0.0.0.0/0.";
-        return;
+        $.done("All traffic allowed from 0.0.0.0/0.");
       } else if (result.anyTrafficPeer.cidr.length !== 0) {
         $.info += `All traffic from those CIDRs are allowed: ${result.anyTrafficPeer.cidr.join(
           ", "
@@ -92,8 +86,9 @@ steps:
       }
 
       if (result.peer.any) {
-        $.ok = "Traffic is allowed from 0.0.0.0/0";
-        return;
+        $.done(
+          `Traffic is allowed from 0.0.0.0/0 using protocol ${$.data.protocol} at port ${$.data.port}.`
+        );
       } else if (result.peer.cidr.length !== 0) {
         $.info += `Traffic is allowed from those CIDRs: ${result.peer.cidr.join(
           ", "
@@ -101,7 +96,7 @@ steps:
       }
 
       if ($.info === "") {
-        $.err += `No IP is allowed to access this instance using ${$.data.protocol} at ${$.data.port}, please fix your security group inbound rules. `;
+        $.err += `No IP is allowed to access this instance using protocol ${$.data.protocol} at port ${$.data.port}, please fix your security group inbound rules. `;
         $.err += `Security group ids: ${$.data.securityGroupIds.join(", ")}`;
         return;
       }
@@ -114,12 +109,11 @@ steps:
       });
 
       if (res.type == "no") {
-        $.err = `Subnet ${$.data.subnetId} is not public. `;
-        return;
+        $.panic(`Subnet ${$.data.subnetId} has no route to an Internet Gateway.`);
       }
 
       if (res.type == "any") {
-        $.ok = `0.0.0.0/0 will be route to an Internet Gateway`;
+        $.done(`0.0.0.0/0 will be route to an Internet Gateway`);
       } else if (res.type == "cidr") {
         $.info += `Those CIDR blocks will be route to an Internet Gateway: ${res.cidr.join(
           ", "
@@ -127,14 +121,11 @@ steps:
       }
   - name: Check network ACL.
     js: |
-      let inboundRules = [];
-      let outboundRules = [];
-
       let res = await $.aws.ec2.describeNetworkAcls({
         Filters: [{ Name: "association.subnet-id", Values: [$.data.subnetId] }],
       });
-      inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
-      outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
+      let inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
+      let outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
 
       // sort rules by rule number ascent
       inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
