@@ -18,35 +18,26 @@ input:
     placeholder: 0-65535
     store: port
 steps:
-  - name: Validate input.
-    js: |
-      if ($.data.port < 0 || $.data.port > 65535) {
-        $.err = "Wrong port.";
-        return;
-      }
-      if (!["tcp", "udp", "icmp"].includes($.data.protocol)) {
-        $.err = 'Protocol should be one of "tcp", "udp", "icmp".';
-        return;
-      }
-      $.ok = "OK.";
   - name: Instance status check.
     js: |
       let res = await $.aws.ec2.describeInstanceStatus({
         InstanceIds: [$.data.instanceId],
       });
 
-      if (res.InstanceStatuses[0].InstanceState.Name != "running") {
-        $.err = `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `;
-        return;
-      } else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok") {
-        $.err = `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `;
-        return;
-      } else if (res.InstanceStatuses[0].SystemStatus.Status != "ok") {
-        $.err = `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `;
-        return;
-      }
+      if (res.InstanceStatuses[0].InstanceState.Name != "running")
+        $.panic(
+          `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `
+        );
+      else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok")
+        $.panic(
+          `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `
+        );
+      else if (res.InstanceStatuses[0].SystemStatus.Status != "ok")
+        $.panic(
+          `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `
+        );
 
-      $.ok = "Instance is running, all status check passed. ";
+      $.done("Instance is running, all status check passed. ");
   - name: Retrieve instance info, check public IP.
     js: |
       let res = await $.aws.ec2.describeInstances({
@@ -55,9 +46,9 @@ steps:
 
       let publicIps = $.jp.query(res, "$..PrivateIpAddresses..PublicIp");
       if (publicIps.length === 0) {
-        $.err = "No public IP is associated to this instance.";
-        return;
+        $.panic("No public IP is associated to this instance.");
       }
+
       $.ok += `Public IP address: ${publicIps.join(", ")}. `;
 
       $.data.securityGroupIds = $.jp.query(res, "$..SecurityGroups[*].GroupId");
