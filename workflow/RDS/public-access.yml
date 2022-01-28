@@ -13,42 +13,37 @@ input:
 steps:
   - name: Retrieve database instance info & public accessibility.
     js: |
-      try {
-        let res = await $.aws.rds.describeDBInstances({
-          DBInstanceIdentifier: $.data.dbIdentifier,
-        });
-        if (res.DBInstances.length === 0) {
-          $.err = `Database ${$.data.dbIdentifier} not found. Please check the identifier, your AWS profile, and the selected region. `;
-          return;
-        }
-
-        $.data.port = $.jp.query(res, "$..Port")[0];
-        let username = $.jp.query(res, "$..MasterUsername")[0];
-        let publiclyAccessible = $.jp.query(res, "$..PubliclyAccessible")[0];
-        $.data.securityGroupIds = $.jp.query(
-          res,
-          "$..VpcSecurityGroups[?(@.Status=='active')].VpcSecurityGroupId"
-        );
-        $.data.subnets = $.jp.query(
-          res,
-          "$..Subnets[?(@.SubnetStatus=='Active')].SubnetIdentifier"
-        );
-        $.data.vpc = $.jp.query(res, "$..VpcId")[0];
-
-        if (!publiclyAccessible) {
-          $.err = `Database is not public accessible. Please modify your database to enable "Public access" `;
-          return;
-        }
-
-        $.ok = `Got database username: ${username}, port: ${
-          $.data.port
-        }, active security groups: ${$.data.securityGroupIds.join(
-          ", "
-        )}, active subnets: ${$.data.subnets.join(", ")}, vpc: ${$.data.vpc} `;
-      } catch (e) {
-        $.err = e;
+      let res = await $.aws.rds.describeDBInstances({
+        DBInstanceIdentifier: $.data.dbIdentifier,
+      });
+      if (res.DBInstances.length === 0) {
+        $.err = `Database ${$.data.dbIdentifier} not found. Please check the identifier, your AWS profile, and the selected region. `;
         return;
       }
+
+      $.data.port = $.jp.query(res, "$..Port")[0];
+      let username = $.jp.query(res, "$..MasterUsername")[0];
+      let publiclyAccessible = $.jp.query(res, "$..PubliclyAccessible")[0];
+      $.data.securityGroupIds = $.jp.query(
+        res,
+        "$..VpcSecurityGroups[?(@.Status=='active')].VpcSecurityGroupId"
+      );
+      $.data.subnets = $.jp.query(
+        res,
+        "$..Subnets[?(@.SubnetStatus=='Active')].SubnetIdentifier"
+      );
+      $.data.vpc = $.jp.query(res, "$..VpcId")[0];
+
+      if (!publiclyAccessible) {
+        $.err = `Database is not public accessible. Please modify your database to enable "Public access" `;
+        return;
+      }
+
+      $.ok = `Got database username: ${username}, port: ${
+        $.data.port
+      }, active security groups: ${$.data.securityGroupIds.join(
+        ", "
+      )}, active subnets: ${$.data.subnets.join(", ")}, vpc: ${$.data.vpc} `;
   - name: Check subnets' route table.
     js: |
       for (let i = 0; i < $.data.subnets[i]; ++i) {
@@ -57,11 +52,6 @@ steps:
           subnetId: subnet,
           vpcId: $.data.vpc,
         });
-
-        if (res.err) {
-          $.err = err;
-          return;
-        }
 
         if (res.type == "no") {
           $.err = `Subnet ${subnet} is not public. `;
@@ -85,11 +75,6 @@ steps:
         protocol: "tcp",
         port: $.data.port,
       });
-
-      if (result.err) {
-        $.err = result.err;
-        return;
-      }
 
       if (result.peer.no && result.anyTrafficPeer.no) {
         $.err +=
@@ -122,16 +107,12 @@ steps:
 
       for (let i = 0; i < $.data.subnets.length; ++i) {
         let subnet = $.data.subnets[i];
-        try {
-          let res = await $.aws.ec2.describeNetworkAcls({
-            Filters: [{ Name: "association.subnet-id", Values: [subnet] }],
-          });
-          inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
-          outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
-        } catch (e) {
-          $.err = e;
-          return;
-        }
+
+        let res = await $.aws.ec2.describeNetworkAcls({
+          Filters: [{ Name: "association.subnet-id", Values: [subnet] }],
+        });
+        inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
+        outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
 
         // sort rules by rule number ascent
         inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);

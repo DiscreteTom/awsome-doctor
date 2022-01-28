@@ -17,58 +17,67 @@ input:
     store: lbName
 steps:
   - name: Retrieve load balancer info.
-    js: |
-      let res;
-      try {
-        res = await $.aws.elbv2.describeLoadBalancers({ Names: [$.data.lbName] });
-      } catch (e) {
-        $.err = e;
-        return;
-      }
+    js: >
+      let res = await $.aws.elbv2.describeLoadBalancers({ Names: [$.data.lbName]
+      });
+
 
       let lb = res.LoadBalancers[0];
+
       let type = lb.Type;
+
       $.data.lbSgs = lb.SecurityGroups;
+
       $.data.lbArn = lb.LoadBalancerArn;
 
+
       $.ok = `/md
+
       - Security groups: \`${$.data.lbSgs.join(", ")}\`.
+
       - ARN: \`${$.data.lbArn}\`. 
+
       - Type: \`${type}\`.
+
       `;
   - name: Retrieve target group info.
-    js: |
-      let res;
-      try {
-        res = await $.aws.elbv2.describeTargetGroups({ Names: [$.data.tgName] });
-      } catch (e) {
-        $.err = e;
-        return;
-      }
+    js: >
+      let res = await $.aws.elbv2.describeTargetGroups({ Names: [$.data.tgName]
+      });
+
 
       let tg = res.TargetGroups[0];
+
 
       if (tg.LoadBalancerArns.indexOf($.data.lbArn) == -1) {
         $.err = `Target group '${$.data.tgName}' is not associated with the load balancer '${$.data.lbName}'`;
         return;
       }
+
       if (!tg.HealthCheckEnabled) {
         $.err = `Health check is not enabled for target group '${$.data.tgName}'`;
         return;
       }
+
       if (tg.TargetType !== "instance") {
         $.err = `Currently the target type ${tg.TargetType} is not supported.`;
         return;
       }
 
+
       $.data.tgArn = tg.TargetGroupArn;
+
       $.data.healthCheckPort = tg.HealthCheckPort;
 
+
       $.info = `/md
+
       - Protocol: \`${tg.Protocol}\`
         - Version: \`${tg.ProtocolVersion}\`
       - Load balancer listen port: \`${tg.Port}\`
+
       - Target type: \`${tg.TargetType}\`
+
       - Health check
         - Enabled: \`${tg.HealthCheckEnabled}\`
         - Protocol: \`${tg.HealthCheckProtocol}\`
@@ -76,18 +85,13 @@ steps:
         - Path: \`${tg.HealthCheckPath}\`
         - Success codes: \`${tg.Matcher.HttpCode || tg.Matcher.GrpcCode}\`
       - Arn: \`${$.data.tgArn}\`
+
       `;
   - name: Retrieve unhealthy targets.
     js: |
-      let res;
-      try {
-        res = await $.aws.elbv2.describeTargetHealth({
-          TargetGroupArn: $.data.tgArn,
-        });
-      } catch (e) {
-        $.err = e;
-        return;
-      }
+      let res = await $.aws.elbv2.describeTargetHealth({
+        TargetGroupArn: $.data.tgArn,
+      });
 
       if (res.TargetHealthDescriptions.length === 0) {
         $.info = `No targets in the target group '${$.data.tgName}'. `;
@@ -148,11 +152,6 @@ steps:
           protocol: "tcp",
           port: t.HealthCheckPort,
         });
-
-        if (result.err) {
-          $.err = result.err;
-          return;
-        }
 
         // traffic allowed from any source
         if (result.anyTrafficPeer.any || result.peer.any) {
@@ -223,11 +222,6 @@ steps:
         protocol: "tcp",
         port: 22, // a random port
       });
-
-      if (result.err) {
-        $.err = result.err;
-        return;
-      }
 
       if (result.anyTrafficPeer.any) {
         $.ok = "All traffic to 0.0.0.0/0 are allowed.";

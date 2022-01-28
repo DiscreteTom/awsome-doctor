@@ -1,12 +1,12 @@
 title: A port is not accessible from the Internet.
-description: ""
+description: ''
 data:
-  instanceId: ""
+  instanceId: ''
   securityGroupIds: []
-  vpcId: ""
-  subnetId: ""
+  vpcId: ''
+  subnetId: ''
   port: 22
-  protocol: "tcp"
+  protocol: tcp
 input:
   - label: Instance ID
     placeholder: i-01234567891234567
@@ -31,36 +31,27 @@ steps:
       $.ok = "OK.";
   - name: Instance status check.
     js: |
-      try {
-        let res = await $.aws.ec2.describeInstanceStatus({
-          InstanceIds: [$.data.instanceId],
-        });
+      let res = await $.aws.ec2.describeInstanceStatus({
+        InstanceIds: [$.data.instanceId],
+      });
 
-        if (res.InstanceStatuses[0].InstanceState.Name != "running") {
-          $.err = `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `;
-          return;
-        } else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok") {
-          $.err = `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `;
-          return;
-        } else if (res.InstanceStatuses[0].SystemStatus.Status != "ok") {
-          $.err = `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `;
-          return;
-        }
-      } catch (e) {
-        $.err = e;
+      if (res.InstanceStatuses[0].InstanceState.Name != "running") {
+        $.err = `Instance is not running. Instance state: ${res.InstanceStatuses[0].InstanceState.Name}. `;
+        return;
+      } else if (res.InstanceStatuses[0].InstanceStatus.Status != "ok") {
+        $.err = `Instance status check failed. Status: ${res.InstanceStatuses[0].InstanceStatus.Status}. `;
+        return;
+      } else if (res.InstanceStatuses[0].SystemStatus.Status != "ok") {
+        $.err = `System status check failed. Status: ${res.InstanceStatuses[0].SystemStatus.Status}. `;
         return;
       }
 
       $.ok = "Instance is running, all status check passed. ";
   - name: Retrieve instance info, check public IP.
     js: |
-      let res;
-      try {
-        res = await $.aws.ec2.describeInstances({ InstanceIds: [$.data.instanceId] });
-      } catch (e) {
-        $.err = e;
-        return;
-      }
+      let res = await $.aws.ec2.describeInstances({
+        InstanceIds: [$.data.instanceId],
+      });
 
       let publicIps = $.jp.query(res, "$..PrivateIpAddresses..PublicIp");
       if (publicIps.length === 0) {
@@ -93,11 +84,6 @@ steps:
         protocol: $.data.protocol,
         port: $.data.port,
       });
-
-      if (result.err) {
-        $.err = result.err;
-        return;
-      }
 
       if (result.anyTrafficPeer.no && result.peer.no) {
         $.err += `No IP is allowed to access this instance using ${$.data.protocol} at ${$.data.port}, please fix your security group inbound rules. `;
@@ -136,11 +122,6 @@ steps:
         vpcId: $.data.vpcId,
       });
 
-      if (res.err) {
-        $.err = err;
-        return;
-      }
-
       if (res.type == "no") {
         $.err = `Subnet ${$.data.subnetId} is not public. `;
         return;
@@ -157,16 +138,12 @@ steps:
     js: |
       let inboundRules = [];
       let outboundRules = [];
-      try {
-        let res = await $.aws.ec2.describeNetworkAcls({
-          Filters: [{ Name: "association.subnet-id", Values: [$.data.subnetId] }],
-        });
-        inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
-        outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
-      } catch (e) {
-        $.err = e;
-        return;
-      }
+
+      let res = await $.aws.ec2.describeNetworkAcls({
+        Filters: [{ Name: "association.subnet-id", Values: [$.data.subnetId] }],
+      });
+      inboundRules = $.jp.query(res, "$..Entries[?(!@.Egress)]");
+      outboundRules = $.jp.query(res, "$..Entries[?(@.Egress)]");
 
       // sort rules by rule number ascent
       inboundRules.sort((a, b) => a.RuleNumber - b.RuleNumber);
