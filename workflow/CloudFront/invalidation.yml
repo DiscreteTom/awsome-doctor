@@ -1,0 +1,39 @@
+title: Invalidation not working.
+description: ''
+data:
+  distributionId: ''
+  invalidationId: ''
+  url: ''
+input:
+  - label: Distribution ID
+    placeholder: 'Example: EDFDVBD6EXAMPLE'
+    store: distributionId
+  - label: Invalidation Request ID
+    placeholder: 'Example: I2J0I21PCUYOIK '
+    store: invalidationId
+  - label: File URL
+    placeholder: https://example.com/some-path/index.html
+    store: url
+steps:
+  - name: Check invalidation.
+    js: |
+      let path = new URL($.data.url).pathname;
+
+      let res = await $.aws.cloudfront.getInvalidation({
+        Id: $.data.invalidationId,
+        DistributionId: $.data.distributionId,
+      });
+
+      $.jp.query(res, `$..Items[*]`).map((i) => {
+        if (i.endsWith("*")) {
+          if (path.startsWith(i.slice(0, -1))) {
+            $.done(`File matches the rule: ${i}`);
+          }
+        } else {
+          if (path == i) {
+            $.done(`File matches the rule: ${i}`);
+          }
+        }
+      });
+
+      $.panic(`No rule can be matched.`);
