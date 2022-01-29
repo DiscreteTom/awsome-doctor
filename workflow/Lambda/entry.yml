@@ -1,0 +1,139 @@
+title: Entry function not found.
+description: ''
+data:
+  funcName: ''
+  location: ''
+  handler: ''
+  zipFile: null
+  content: null
+input:
+  - label: Function Name
+    placeholder: '"my-function" / "my-function:v1" / ARN'
+    store: funcName
+    type: text
+  - label: ZIP File (Optional)
+    placeholder: ''
+    store: zipFile
+    type: file
+steps:
+  - name: Get function info.
+    js: >
+      let res = await $.aws.lambda.getFunction({ FunctionName: $.data.funcName
+      });
+
+      let repoType = $.jp.query(res, `$..RepositoryType`)[0];
+
+      let packageType = $.jp.query(res, `$..PackageType`)[0];
+
+
+      if (repoType !== "S3") $.panic(`Respository type not supported:
+      ${repoType}`);
+
+
+      if (packageType !== "Zip")
+        $.panic(`Package type not supported: ${packageType}`);
+
+      $.data.location = $.jp.query(res, `$..Location`)[0];
+
+      $.data.handler = $.jp.query(res, `$..Handler`)[0];
+
+
+      $.done(`/md
+
+      - Name: \`${$.jp.query(res, `$..FunctionName`)[0]}\`
+
+      - ARN: \`${$.jp.query(res, `$..FunctionArn`)[0]}\`
+
+      - Handler: \`${$.data.handler}\`
+
+      - RevisionId: \`${$.jp.query(res, `$..RevisionId`)[0]}\`
+
+
+      You can download the ZIP file from [here](${$.data.location}) in 10
+      minutes.
+
+      `);
+  - name: Get ZIP file content.
+    js: |
+      if (!$.data.zipFile) {
+        // try to download zip file
+        try {
+          let res = await $.axios.get($.data.location, {
+            responseType: "arraybuffer",
+          });
+          $.data.content = new Uint8Array(res.data);
+        } catch {
+          if (window) {
+            // browser can't make CORS request
+            $.panic(
+              `/md\nPlease download the ZIP file from [here](${$.data.location}) then input the ZIP file.`
+            );
+          } else {
+            // other issue
+            $.panic("Failed to get ZIP file. Please input ZIP file manually.");
+          }
+        }
+      } else {
+        let buf = await $.data.zipFile.arrayBuffer();
+        $.data.content = new Uint8Array(buf);
+      }
+
+      $.done(`Got file content, length: ${$.data.content.length}.`);
+  - name: Read ZIP structure.
+    js: |
+      // load zipjs
+      if (!window.zip) {
+        try {
+          let res = await $.axios.get(
+            "https://unpkg.com/@zip.js/zip.js@2.4.2/dist/zip.min.js"
+          );
+          eval(res.data);
+        } catch {
+          $.panic(`/md
+      Cannot load \`zip.js\`. Please check your network to https://unpkg.com .
+        `);
+        }
+      }
+
+      let reader = new window.zip.ZipReader(
+        new window.zip.Uint8ArrayReader($.data.content)
+      );
+
+      let entries = await reader.getEntries();
+      let files = entries.map((e) => e.filename);
+      let tops = files.filter(
+        (e) =>
+          e.split("/").length == 1 || (e.split("/").length == 2 && e.endsWith("/"))
+      );
+
+      let [handlerFile, handlerFunc] = $.data.handler.split(".");
+
+      // check handler file
+      let fileIndex = tops.map((t) => t.split(".")[0]).indexOf(handlerFile);
+      if (fileIndex == -1) {
+        $.err = `/md
+      Handler file ${handlerFile} not found in the top level of the ZIP file.
+      Top level file/folders:\n\n`;
+        tops.map((t) => ($.err += `- ${t}\n`));
+        $.err += "\n";
+
+        let nested = files.map((f) => f.split(".")[0]).indexOf(handlerFile);
+        if (nested != -1) {
+          $.err += `But handler file is **found** in nested folders, full path: ${files[nested]}\n\n`;
+          $.err += `Maybe you need to unwrap you ZIP file.\n\n`;
+        } else {
+          $.err += `Handler file is also not found in nested folders.\n\n`;
+          $.err += `Maybe you need to change your function handler settings.\n\n`;
+        }
+      } else {
+        // check handler function
+        const text = await entries[fileIndex].getData(new window.zip.TextWriter());
+        if (text.includes(handlerFunc)) {
+          $.ok = `Found ${handlerFunc} in ${tops[fileIndex]}.`;
+        } else {
+          $.err = `Can't find handler function ${handlerFunc} in file ${tops[fileIndex]}.\n\n`;
+          $.err += `Maybe you need to change your function handler settings.\n\n`;
+        }
+      }
+
+      reader.close();
