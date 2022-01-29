@@ -212,7 +212,7 @@ There are some approaches to reuse external or 3rd party code:
 $.utils.sg.checkEC2Instances(...);
 
 // use http request to retrieve 3rd party code
-let res = await $.axios.get("https://example.com")
+let res = await $.axios.get("https://unpkg.com/:package@:version/:file")
 eval(res.data);
 
 // use steps from other workflow
