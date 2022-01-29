@@ -17,23 +17,29 @@ input:
 steps:
   - name: Check invalidation.
     js: |
-      let path = new URL($.data.url).pathname;
+      let url = new URL($.data.url);
+      let path = url.pathname;
 
       let res = await $.aws.cloudfront.getInvalidation({
         Id: $.data.invalidationId,
         DistributionId: $.data.distributionId,
       });
 
-      $.jp.query(res, `$..Items[*]`).map((i) => {
-        if (i.endsWith("*")) {
-          if (path.startsWith(i.slice(0, -1))) {
-            $.done(`File matches the rule: ${i}`);
+      let rules = $.jp.query(res, `$..Items[*]`);
+      rules.map((r) => {
+        if (r.endsWith("*")) {
+          if (path.startsWith(r.slice(0, -1))) {
+            $.done(`File matches the rule: ${r}`);
           }
         } else {
-          if (path == i) {
-            $.done(`File matches the rule: ${i}`);
+          if (path == r) {
+            $.done(`File matches the rule: ${r}`);
           }
         }
       });
 
-      $.panic(`No rule can be matched.`);
+      $.err = `/md
+      No rule can be matched.\n
+      The provided invalidation request will invalidate those files:\n
+      `;
+      rules.map((r) => ($.err += `- ${url.origin}${r}\n`));
