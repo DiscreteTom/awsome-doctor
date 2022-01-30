@@ -1,0 +1,335 @@
+title: Peering not working.
+description: ""
+data:
+  srcVpc: null
+  destVpc: null
+  srcEc2: null
+  id: ""
+  destEc2: null
+  fromIp: ""
+  toIp: ""
+  port: 22
+  protocol: tcp
+  fromEni: null
+  toEni: null
+  fromEc2: null
+  toEc2: null
+  fromRegion: ""
+  toRegion: ""
+input:
+  - label: Peering ID
+    type: text
+    placeholder: pcx-12345678
+    store: id
+  - label: Traffic From Private IP
+    type: text
+    placeholder: 172.31.0.1
+    store: fromIp
+  - label: Traffic To Private IP
+    type: text
+    placeholder: 10.0.0.1
+    store: toIp
+  - label: Protocol
+    type: text
+    placeholder: tcp / udp
+    store: protocol
+  - label: Port
+    type: text
+    placeholder: "22"
+    store: port
+steps:
+  - name: Get VPC info.
+    js: |
+      let res = await $.aws.ec2.describeVpcPeeringConnections({
+        VpcPeeringConnectionIds: [$.data.id],
+      });
+
+      // check peering status
+      let status = $.jp.query(res, `$..Status`)[0];
+      if (status.Code !== "active") {
+        $.panic(`/md
+      Peering is not in \`active\` state.
+
+      - Current state code: \`${status.Code}\`.
+      - Current state message: \`${status.Message}\`.
+      `);
+      }
+
+      // check owner
+      let owners = $.jp.query(res, `$..OwnerId`);
+      if (owners[0] !== owners[1]) {
+        $.panic(
+          `The requester VPC & accepter VPC are not in the same AWS account, which is not supported by this tool yet.`
+        );
+      }
+
+      $.data.srcVpc = $.jp.query(res, `$..RequesterVpcInfo`)[0];
+      $.data.destVpc = $.jp.query(res, `$..AccepterVpcInfo`)[0];
+
+      // prepare ec2 client
+      let credentials = await $.aws.ec2.config.credentials();
+      if ($.data.srcVpc.Region) {
+        $.data.srcEc2 = new $.aws.EC2({
+          credentials,
+          region: $.data.srcVpc.Region,
+        });
+      }
+      if ($.data.destVpc.Region) {
+        $.data.destEc2 = new $.aws.EC2({
+          credentials,
+          region: $.data.destVpc.Region,
+        });
+      }
+
+      $.ok = `/md
+      Requester VPC:
+
+      - ID: ${$.data.srcVpc.VpcId}
+      - CIDR: ${$.data.srcVpc.CidrBlock}
+      - Region: ${$.data.srcVpc.Region || "current region"}
+
+      Accepter VPC:
+
+      - ID: ${$.data.destVpc.VpcId}
+      - CIDR: ${$.data.destVpc.CidrBlock}
+      - Region: ${$.data.destVpc.Region || "current region"}
+      `;
+  - name: Get ENI info.
+    js: |
+      $.data.ipToBinary = (ip) => {
+        let result = "";
+        ip.split(".").map((part) => {
+          let binary = parseInt(part).toString(2);
+          result += ("0".repeat(8) + binary).substr(-8);
+        });
+        return result;
+      };
+
+      $.data.ipInCidr = (ip, cidr) => {
+        let [startIp, prefix] = cidr.split("/");
+        let startBinary = $.data.ipToBinary(startIp);
+        let endBinary = startBinary.slice(0, prefix) + "1".repeat(32 - prefix);
+        let start = parseInt(startBinary, 2);
+        let end = parseInt(endBinary, 2);
+        let target = parseInt($.data.ipToBinary(ip), 2);
+        return start <= target && end >= target;
+      };
+
+      let applyEni = async (fromEc2, fromVpc, toEc2, toVpc) => {
+        $.data.fromEc2 = fromEc2;
+        $.data.toEc2 = toEc2;
+        $.data.fromRegion = fromVpc.Region;
+        $.data.toRegion = toVpc.Region;
+
+        let res1 = await fromEc2.describeNetworkInterfaces({
+          Filters: [
+            { Name: "addresses.private-ip-address", Values: [$.data.fromIp] },
+          ],
+        });
+        $.data.fromEni = $.jp.query(
+          res1,
+          `$..NetworkInterfaces[?(@.VpcId=='${fromVpc.VpcId}')]`
+        )[0];
+        let res2 = await toEc2.describeNetworkInterfaces({
+          Filters: [{ Name: "addresses.private-ip-address", Values: [$.data.toIp] }],
+        });
+        $.data.toEni = $.jp.query(
+          res2,
+          `$..NetworkInterfaces[?(@.VpcId=='${toVpc.VpcId}')]`
+        )[0];
+      };
+
+      // check ip in cidr, when get eni info
+      if ($.data.ipInCidr($.data.fromIp, $.data.srcVpc.CidrBlock)) {
+        // fromIp in src vpc
+        if ($.data.ipInCidr($.data.toIp, $.data.destVpc.CidrBlock)) {
+          // toIp in dest vpc
+          await applyEni(
+            $.data.srcEc2,
+            $.data.srcVpc,
+            $.data.destEc2,
+            $.data.destVpc
+          );
+        } else {
+          $.panic(
+            `Source IP ${$.data.fromIp} is in VPC ${$.data.srcVpc.VpcId} of region ${$.data.fromRegion}, but destination IP ${$.data.toIp} is not in VPC ${$.data.destVpc.VpcId} of region ${$.data.toRegion}.`
+          );
+        }
+      } else if ($.data.ipInCidr($.data.fromIp, $.data.destVpc.CidrBlock)) {
+        // fromIp in dest vpc
+        if ($.data.ipInCidr($.data.toIp, $.data.destVpc.CidrBlock)) {
+          // toIp in src vpc
+          await applyEni(
+            $.data.destEc2,
+            $.data.destVpc,
+            $.data.srcEc2,
+            $.data.srcVpc
+          );
+        } else {
+          $.panic(
+            `Source IP ${$.data.fromIp} is in VPC ${$.data.destVpc.VpcId} of region ${$.data.fromRegion}, but destination IP ${$.data.toIp} is not in VPC ${$.data.srcVpc.VpcId} of region ${$.data.toRegion}.`
+          );
+        }
+      } else {
+        $.panic(
+          `Source IP ${$.data.fromIp} is not in VPC ${$.data.srcVpc.VpcId} or VPC ${$.data.destVpc.VpcId}.`
+        );
+      }
+
+      $.ok = `/md
+      Traffic from this ENI:
+
+      - ID: \`${$.data.fromEni.NetworkInterfaceId}\`
+      - VPC: \`${$.data.fromEni.VpcId}\`
+      - Subnet: \`${$.data.fromEni.SubnetId}\`
+      - Private IP: \`${$.data.fromEni.PrivateIpAddress}\`
+      - Description: \`${$.data.fromEni.Description || "None"}\`
+      - Security Groups: ${
+        $.data.fromEni.Groups.map((g) => `\`${g.GroupId}\``).join(", ") || "None"
+      }
+      - Status: \`${$.data.fromEni.Status}\`
+      - Region: \`${$.data.fromRegion}\`
+
+      Traffic to this ENI:
+
+      - ID: \`${$.data.toEni.NetworkInterfaceId}\`
+      - VPC: \`${$.data.toEni.VpcId}\`
+      - Subnet: \`${$.data.toEni.SubnetId}\`
+      - Private IP: \`${$.data.toEni.PrivateIpAddress}\`
+      - Description: \`${$.data.toEni.Description || "None"}\`
+      - Security Groups: ${
+        $.data.toEni.Groups.map((g) => `\`${g.GroupId}\``).join(", ") || "None"
+      }
+      - Status: \`${$.data.toEni.Status}\`
+      - Region: \`${$.data.toRegion}\`
+      `;
+  - name: Check subnet route table.
+    js: |
+      let getSubnetRouteTable = async ({ ec2, subnetId, vpcId }) => {
+        let res;
+        // find route table by subnet id
+        res = await ec2.describeRouteTables({
+          Filters: [{ Name: "association.subnet-id", Values: [subnetId] }],
+        });
+
+        if (res.RouteTables.length !== 0) {
+          // route table explicitly associated with the subnet
+          return res.RouteTables[0];
+        } else {
+          // use VPC main route table
+          res = await ec2.describeRouteTables({
+            Filters: [{ Name: "vpc-id", Values: [vpcId] }],
+          });
+
+          let routeTableId = $.jp.query(
+            res,
+            "$..Associations[?(@.Main)].RouteTableId"
+          )[0];
+          return $.jp.query(
+            res,
+            `$..RouteTables[?(@.RouteTableId=='${routeTableId}')]`
+          )[0];
+        }
+      };
+
+      // get route table
+      let fromRt = await getSubnetRouteTable({
+        ec2: $.data.fromEc2,
+        subnetId: $.data.fromEni.SubnetId,
+        vpcId: $.data.fromEni.VpcId,
+      });
+      let toRt = await getSubnetRouteTable({
+        ec2: $.data.toEc2,
+        subnetId: $.data.toEni.SubnetId,
+        vpcId: $.data.toEni.VpcId,
+      });
+
+      // get route table rule
+      let fromRoute = $.jp.query(
+        fromRt,
+        `$..Routes[?(@.VpcPeeringConnectionId=='${$.data.id}')]`
+      );
+      let toRoute = $.jp.query(
+        toRt,
+        `$..Routes[?(@.VpcPeeringConnectionId=='${$.data.id}')]`
+      );
+
+      // check route rule exist
+      if (fromRoute.length === 0)
+        $.panic(
+          `Missing route table rule to VPC peering ${$.data.id} for route table ${fromRt.RouteTableId} in region ${$.data.fromRegion}.`
+        );
+      if (toRoute.length === 0)
+        $.panic(
+          `Missing route table rule to VPC peering ${$.data.id} for route table ${toRt.RouteTableId} in region ${$.data.toRegion}.`
+        );
+      // check rule state==active
+      if (fromRoute[0].State !== "active")
+        $.panic(
+          `The rule of route table ${fromRt.RouteTableId} in region ${$.data.fromRegion} for VPC peering to ${$.data.id} is not active, state: ${fromRoute[0].State}`
+        );
+      if (toRoute[0].State !== "active")
+        $.panic(
+          `The rule of route table ${toRt.RouteTableId} in region ${$.data.toRegion} for VPC peering to ${$.data.id} is not active, state: ${toRoute[0].State}`
+        );
+      // check ip in route target cidr
+      if (!$.data.ipInCidr($.data.fromIp, toRoute[0].DestinationCidrBlock))
+        $.panic(
+          `IP ${$.data.fromIp} is not in the CIDR ${toRoute[0].DestinationCidrBlock} for route table ${toRt.RouteTableId} in region ${$.data.fromRegion}.`
+        );
+      if (!$.data.ipInCidr($.data.toIp, fromRoute[0].DestinationCidrBlock))
+        $.panic(
+          `IP ${$.data.toIp} is not in the CIDR ${fromRoute[0].DestinationCidrBlock} for route table ${fromRt.RouteTableId} in region ${$.data.toRegion}`
+        );
+
+      $.ok = `/md
+      Traffic from this route table:
+
+      - ID: \`${fromRt.RouteTableId}\`
+      - Region: \`${$.data.fromRegion}\`
+      - VPC: \`${fromRt.VpcId}\`
+      - Route Destination CIDR: \`${fromRoute[0].DestinationCidrBlock}\`
+      - Route State: \`${fromRoute[0].State}\`
+
+      Traffic to this route table:
+
+      - ID: \`${toRt.RouteTableId}\`
+      - Region: \`${$.data.toRegion}\`
+      - VPC: \`${toRt.VpcId}\`
+      - Route Destination CIDR: \`${toRoute[0].DestinationCidrBlock}\`
+      - Route State: \`${toRoute[0].State}\`
+      `;
+  - name: Check security group.
+    js: |
+      let checkPort = async ({
+        ec2,
+        direction,
+        securityGroupIds,
+        protocol,
+        port,
+      }) => {
+        let res = await ec2.describeSecurityGroups({
+          GroupIds: securityGroupIds,
+        });
+
+        return {
+          anyTrafficPeer: $.utils.sg.getPeer({ $, res, direction, protocol: "-1" }),
+          peer: $.utils.sg.getPeer({ $, res, direction, protocol, port }),
+          res,
+        };
+      };
+
+      let resFrom = await checkPort({
+        ec2: $.data.fromEc2,
+        direction: "out",
+        securityGroupIds: $.data.fromEni.Groups.map((g) => g.GroupId),
+        protocol: $.data.protocol,
+        port: $.data.port,
+      });
+      let resTo = await checkPort({
+        ec2: $.data.toEc2,
+        direction: "in",
+        securityGroupIds: $.data.toEni.Groups.map((g) => g.GroupId),
+        protocol: $.data.protocol,
+        port: $.data.port,
+      });
