@@ -35,7 +35,7 @@ input:
     placeholder: i-01234567891234567
     # this input will be stored in the data named `instanceId`
     store: instanceId
-    # currently supported input type: text/file
+    # currently supported input type: text/password/file
     type: text
 
 steps:
