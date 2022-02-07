@@ -71,9 +71,9 @@ Examples:
 ```js
 // call async function
 // and ignore exceptions since we don't plan to handle them
-let res = await $.aws.ec2.describeInstanceStatus({});
+let res = await $.axios.get("https://example.com");
 
-if ( ... ) return; // stop running the current step
+if (!res.data) return; // stop running the current step
 
 // process res
 // ...
@@ -85,19 +85,11 @@ You can access a context variable `$` in your JavaScript code. The context varia
 
 ```js
 let $ = {
-  // AWS JavaScript SDK V3, see https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/index.html
-  aws: {
-    ec2: Object, // EC2 client
-    rds: Object, // RDS client
-    ...
-
-    EC2, // EC2 SDK
-    RDS, // RDS SDK
-    ...
-  },
+  AWS, // aws sdk v2, see https://github.com/aws/aws-sdk-js
+  aws, // aws helper, see examples below
 
   // The data you defined in your workflow file.
-  data: { ... },
+  data: {},
 
   // Json path, see https://github.com/dchester/jsonpath
   jp,
@@ -108,15 +100,15 @@ let $ = {
   // HTTP client, see https://github.com/axios/axios
   axios,
 
-  // output
+  // GET a file from CDN then eval
+  import(url) {},
+
+  // output, see the document below
   err: "",
   info: "",
   ok: "",
-  panic(msg){},
-  done(msg){},
-
-  // util functions in https://github.com/DiscreteTom/awsome-doctor-core/tree/main/utils
-  utils: { ... },
+  panic(msg) {},
+  done(msg) {},
 
   // stop executing remaining steps
   stop: false,
@@ -127,6 +119,14 @@ Examples:
 
 ```js
 // call AWS
+let ec2 = new $.AWS.EC2();
+let res = await ec2
+  .describeInstanceStatus({
+    InstanceIds: [$.data.instanceId],
+  })
+  .promise();
+
+// call AWS with helper
 let res = await $.aws.ec2.describeInstanceStatus({
   InstanceIds: [$.data.instanceId],
 });
@@ -144,15 +144,6 @@ let publicIps = $.jp.query(res, "$..PrivateIpAddresses..PublicIp");
 $.err += "error";
 $.info += "info";
 $.ok += "ok";
-
-// use util functions
-await $.utils.sg.checkEC2Instances({
-  $,
-  instanceIds: ['i-1234567890']
-  direction: "in",
-  protocol: "tcp",
-  port: 22,
-});
 
 // stop workflow
 $.stop = true;
@@ -202,18 +193,20 @@ With `$.panic`/`$.done`, you can also stop your workflow in nested functions, e.
 
 ### Modularization
 
-> External workflows might be **dangerous** since your AK/SK can be retrieved through `await $.aws.ec2.config.credentials()`.
+> External workflows might be **dangerous** since your AK/SK can be retrieved through `await $.AWS.config.credentials`.
 
 There are some approaches to reuse external or 3rd party code:
 
 ```js
-// use standard util functions in `$.utils`
-// you can find those util functions in https://github.com/DiscreteTom/awsome-doctor-core/tree/main/utils
-$.utils.sg.checkEC2Instances(...);
+// use helper, which will GET a file and eval it
+await $.import("https://unpkg.com/:package@:version/:file");
 
 // use http request to retrieve 3rd party code
-let res = await $.axios.get("https://unpkg.com/:package@:version/:file")
+let res = await $.axios.get("https://unpkg.com/:package@:version/:file");
 eval(res.data);
+
+// use awsome-doctor-utils
+await $.import("https://unpkg.com/awsome-doctor-utils/dist/bundle.js");
 
 // use steps from other workflow
 let res = await $.axios.get("https://example.com/some-workflow.yml");
@@ -227,13 +220,9 @@ await eval(`
 
 ### Multi-region or Multi-account
 
-> For simple usage, you can set a default region and default AWS credentials in Settings page. Whenever you change those settings, all AWS service clients will be recreated and you can access those clients by `$.aws.<service-name>` with **lower case** service names, e.g.: `$.aws.ec2`.
-
-If you need to access multiple region or multi account, you can create your own service client. E.g.:
-
 ```js
 // retrieve current credentials
-let credentials = await $.aws.ec2.config.credentials();
+let credentials = $.AWS.config.credentials;
 
 // construct config with new credentials or region code
 let config = {
@@ -241,13 +230,14 @@ let config = {
   region: "us-east-2",
 };
 
-// create your own service client with upper case service names
-let ec2 = new $.aws.EC2(config);
+// create your own service client
+let ec2 = new $.AWS.EC2(config);
 ```
 
 ## Related Projects
 
-- [awsome-doctor](https://github.com/DiscreteTom/awsome-doctor): A browser based AWS troubleshooting tool.
-- [awsome-doctor-cli](https://github.com/DiscreteTom/awsome-doctor-cli): Command line interface version of Awsome Doctor.
-- [awsome-doctor-view](https://github.com/DiscreteTom/awsome-doctor-view): Frontend code of Awsome Doctor.
-- [awsome-doctor-core](https://github.com/DiscreteTom/awsome-doctor-core): Workflow executor, plugins and util functions of Awsome Doctor.
+- [awsome-doctor](https://github.com/DiscreteTom/awsome-doctor)
+- [awsome-doctor-cli](https://github.com/DiscreteTom/awsome-doctor-cli)
+- [awsome-doctor-view](https://github.com/DiscreteTom/awsome-doctor-view)
+- [awsome-doctor-core](https://github.com/DiscreteTom/awsome-doctor-core)
+- [awsome-doctor-utils](https://github.com/DiscreteTom/awsome-doctor-utils)
