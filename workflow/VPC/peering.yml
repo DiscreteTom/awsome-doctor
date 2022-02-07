@@ -1,21 +1,23 @@
 title: Peering not working.
-description: ""
+description: ''
 data:
   srcVpc: null
   destVpc: null
   srcEc2: null
-  id: ""
+  id: ''
   destEc2: null
-  fromIp: ""
-  toIp: ""
+  fromIp: ''
+  toIp: ''
   port: 22
   protocol: tcp
   fromEni: null
   toEni: null
   fromEc2: null
   toEc2: null
-  fromRegion: ""
-  toRegion: ""
+  fromRegion: ''
+  toRegion: ''
+  fromSg: []
+  toSg: []
 input:
   - label: Peering ID
     type: text
@@ -35,7 +37,7 @@ input:
     store: protocol
   - label: Port
     type: text
-    placeholder: "22"
+    placeholder: '22'
     store: port
 steps:
   - name: Get VPC info.
@@ -176,6 +178,14 @@ steps:
         );
       }
 
+      $.data.fromSg = $.data.fromEni.Groups.map((g) => g.GroupId);
+      $.data.toSg = $.data.toEni.Groups.map((g) => g.GroupId);
+
+      if ($.data.toSg.length === 0)
+        $.panic(
+          `No security groups associated with the target IP, which means no traffic allowed inbound.`
+        );
+
       $.ok = `/md
       Traffic from this ENI:
 
@@ -184,9 +194,7 @@ steps:
       - Subnet: \`${$.data.fromEni.SubnetId}\`
       - Private IP: \`${$.data.fromEni.PrivateIpAddress}\`
       - Description: \`${$.data.fromEni.Description || "None"}\`
-      - Security Groups: ${
-        $.data.fromEni.Groups.map((g) => `\`${g.GroupId}\``).join(", ") || "None"
-      }
+      - Security Groups: ${$.data.fromSg.join(", ") || "None"}
       - Status: \`${$.data.fromEni.Status}\`
       - Region: \`${$.data.fromRegion}\`
 
@@ -197,9 +205,7 @@ steps:
       - Subnet: \`${$.data.toEni.SubnetId}\`
       - Private IP: \`${$.data.toEni.PrivateIpAddress}\`
       - Description: \`${$.data.toEni.Description || "None"}\`
-      - Security Groups: ${
-        $.data.toEni.Groups.map((g) => `\`${g.GroupId}\``).join(", ") || "None"
-      }
+      - Security Groups: ${$.data.toSg.join(", ") || "None"}
       - Status: \`${$.data.toEni.Status}\`
       - Region: \`${$.data.toRegion}\`
       `;
@@ -299,9 +305,9 @@ steps:
       - Route Destination CIDR: \`${toRoute[0].DestinationCidrBlock}\`
       - Route State: \`${toRoute[0].State}\`
       `;
-  - name: Check security group.
-    js: |
-      let checkPort = async ({
+  - name: Check security group inbound rules.
+    js: >
+      $.data.checkPort = async ({
         ec2,
         direction,
         securityGroupIds,
@@ -319,17 +325,124 @@ steps:
         };
       };
 
-      let resFrom = await checkPort({
-        ec2: $.data.fromEc2,
-        direction: "out",
-        securityGroupIds: $.data.fromEni.Groups.map((g) => g.GroupId),
-        protocol: $.data.protocol,
-        port: $.data.port,
-      });
-      let resTo = await checkPort({
+
+      let result = await $.data.checkPort({
         ec2: $.data.toEc2,
         direction: "in",
-        securityGroupIds: $.data.toEni.Groups.map((g) => g.GroupId),
+        securityGroupIds: $.data.toSg,
         protocol: $.data.protocol,
         port: $.data.port,
       });
+
+
+      // ok
+
+      if (result.anyTrafficPeer.any) {
+        $.done("All traffic allowed from 0.0.0.0/0.");
+      }
+
+      if (result.peer.any) {
+        $.done(
+          `Traffic is allowed from 0.0.0.0/0 using protocol ${$.data.protocol} at port ${$.data.port}.`
+        );
+      }
+
+
+      // check cidr
+
+      result.anyTrafficPeer.cidr.map((cidr) => {
+        if ($.data.ipInCidr($.data.fromIp, cidr)) {
+          $.done(
+            `All traffic allowed from ${cidr}, which contains ${$.data.fromIp} .`
+          );
+        }
+      });
+
+      result.peer.cidr.map((cidr) => {
+        if ($.data.ipInCidr($.data.fromIp, cidr)) {
+          $.done(
+            `Traffic is allowed from ${cidr}, which contains ${$.data.fromIp} .`
+          );
+        }
+      });
+
+
+      // check sg
+
+      result.anyTrafficPeer.sg.map((sg) => {
+        if ($.data.fromSg.includes(sg.GroupId)) {
+          $.done(`All traffic allowed from security group ${sg.GroupId}.`);
+        }
+      });
+
+      result.peer.sg.map((sg) => {
+        if ($.data.fromSg.includes(sg.GroupId)) {
+          $.done(`Traffic is allowed from security group ${sg.GroupId}`);
+        }
+      });
+
+
+      $.err += `No IP is allowed to access the target instance using protocol
+      ${$.data.protocol} at port ${$.data.port}, please fix your security group
+      inbound rules. `;
+
+      $.err += `Security group ids: ${$.data.toSg.join(", ")}`;
+  - name: Check security group outbound rules.
+    js: >
+      let result = await $.data.checkPort({
+        ec2: $.data.fromEc2,
+        direction: "out",
+        securityGroupIds: $.data.fromSg,
+        protocol: $.data.protocol,
+        port: $.data.port,
+      });
+
+
+      // ok
+
+      if (result.anyTrafficPeer.any) {
+        $.done("All traffic allowed to 0.0.0.0/0.");
+      }
+
+      if (result.peer.any) {
+        $.done(
+          `Traffic is allowed to 0.0.0.0/0 using protocol ${$.data.protocol} at port ${$.data.port}.`
+        );
+      }
+
+
+      // check cidr
+
+      result.anyTrafficPeer.cidr.map((cidr) => {
+        if ($.data.ipInCidr($.data.toIp, cidr)) {
+          $.done(`All traffic allowed to ${cidr}, which contains ${$.data.toIp} .`);
+        }
+      });
+
+      result.peer.cidr.map((cidr) => {
+        if ($.data.ipInCidr($.data.toIp, cidr)) {
+          $.done(`Traffic is allowed to ${cidr}, which contains ${$.data.toIp} .`);
+        }
+      });
+
+
+      // check sg
+
+      result.anyTrafficPeer.sg.map((sg) => {
+        if ($.data.toSg.includes(sg.GroupId)) {
+          $.done(`All traffic allowed to security group ${sg.GroupId}.`);
+        }
+      });
+
+      result.peer.sg.map((sg) => {
+        if ($.data.toSg.includes(sg.GroupId)) {
+          $.done(`Traffic is allowed to security group ${sg.GroupId}`);
+        }
+      });
+
+
+      $.err += `No IP is allowed outbound from the source instance using
+      protocol ${$.data.protocol} at port ${$.data.port}, please fix your
+      security group outbound rules. `;
+
+      $.err += `Security group ids: ${$.data.fromSg.join(", ")}`;
