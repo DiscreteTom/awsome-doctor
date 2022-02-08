@@ -22,6 +22,7 @@ input:
   - label: DB Identifier
     placeholder: ''
     store: dbIdentifier
+    type: text
 steps:
   - name: Retrieve database instance info & public accessibility.
     js: |
@@ -57,11 +58,17 @@ steps:
       `);
   - name: Check subnets' route table Internet Gateway.
     js: |
+      let window = await $.import(
+        "https://unpkg.com/awsome-doctor-utils@0.1.0/dist/bundle.js"
+      );
+      $.data.utils = window.awsomeUtils;
+
       let result = {};
 
       $.data.subnets.map((subnet) => {
-        let res = await $.utils.vpc.checkSubnetIgw({
-          $,
+        let res = await $.data.utils.vpc.checkSubnetIgw({
+          ec2: $.aws.ec2,
+          jp: $.jp,
           subnetId: subnet,
           vpcId: $.data.vpc,
         });
@@ -84,8 +91,9 @@ steps:
       if ($.info === "") $.ok = `All subnets are public.`;
   - name: Check security groups' inbound rules.
     js: |
-      let result = await $.utils.sg.checkPort({
-        $,
+      let result = await $.data.utils.sg.checkPort({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         direction: "in",
         securityGroupIds: $.data.securityGroupIds,
         protocol: "tcp",
@@ -135,15 +143,17 @@ steps:
       };
 
       $.data.subnets.map((subnet) => {
-        let inbound = await $.utils.vpc.checkSubnetNacl({
-          $,
+        let inbound = await $.data.utils.vpc.checkSubnetNacl({
+          ec2: $.aws.ec2,
+          jp: $.jp,
           subnetId: subnet,
           direction: "in",
           protocol: "tcp",
           port: $.data.port,
         });
-        let outbound = await $.utils.vpc.checkSubnetNacl({
-          $,
+        let outbound = await $.data.utils.vpc.checkSubnetNacl({
+          ec2: $.aws.ec2,
+          jp: $.jp,
           subnetId: $.data.subnetId,
           direction: "out",
           protocol: "tcp",

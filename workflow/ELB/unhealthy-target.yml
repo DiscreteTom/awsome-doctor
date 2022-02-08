@@ -12,9 +12,11 @@ input:
   - label: Target group name
     placeholder: ''
     store: tgName
+    type: text
   - label: Load balancer name
     placeholder: ''
     store: lbName
+    type: text
 steps:
   - name: Retrieve load balancer info.
     js: >
@@ -138,13 +140,19 @@ steps:
       });
   - name: Check unhealthy targets security groups' inbound rules.
     js: |
+      let window = await $.import(
+        "https://unpkg.com/awsome-doctor-utils@0.1.0/dist/bundle.js"
+      );
+      $.data.utils = window.awsomeUtils;
+
       let sgInfo = [];
 
       for (let i = 0; i < $.data.unhealthyTargets.length; ++i) {
         let t = $.data.unhealthyTargets[i];
 
-        let result = await $.utils.sg.checkEC2Instances({
-          $,
+        let result = await $.data.utils.sg.checkEC2Instances({
+          ec2: $.aws.ec2,
+          jp: $.jp,
           instanceIds: [t.Target.Id],
           direction: "in",
           protocol: "tcp",
@@ -213,8 +221,9 @@ steps:
   - name: Check load balancer security groups' outbound rules.
     js: |
       // check `all traffic` rules
-      let result = await $.utils.sg.checkPort({
-        $,
+      let result = await $.data.utils.sg.checkPort({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         direction: "out",
         securityGroupIds: $.data.lbSgs,
         protocol: "tcp",
@@ -237,8 +246,9 @@ steps:
       for (let i = 0; i < ports.length; ++i) {
         let port = ports[i];
 
-        let result = await $.utils.sg.checkPort({
-          $,
+        let result = await $.data.utils.sg.checkPort({
+          ec2: $.aws.ec2,
+          jp: $.jp,
           direction: "out",
           securityGroupIds: $.data.lbSgs,
           protocol: "tcp",
