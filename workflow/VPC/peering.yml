@@ -69,18 +69,20 @@ steps:
       $.data.destVpc = $.jp.query(res, `$..AccepterVpcInfo`)[0];
 
       // prepare ec2 client
-      let credentials = await $.aws.ec2.config.credentials();
+      let credentials = $.AWS.config.credentials;
       if ($.data.srcVpc.Region) {
-        $.data.srcEc2 = new $.aws.EC2({
+        let ec2 = new $.AWS.EC2({
           credentials,
           region: $.data.srcVpc.Region,
         });
+        $.data.srcEc2 = $.aws.wrap(ec2);
       }
       if ($.data.destVpc.Region) {
-        $.data.destEc2 = new $.aws.EC2({
+        let ec2 = new $.AWS.EC2({
           credentials,
           region: $.data.destVpc.Region,
         });
+        $.data.destEc2 = $.aws.wrap(ec2);
       }
 
       $.ok = `/md
@@ -120,8 +122,6 @@ steps:
       let applyEni = async (fromEc2, fromVpc, toEc2, toVpc) => {
         $.data.fromEc2 = fromEc2;
         $.data.toEc2 = toEc2;
-        $.data.fromRegion = fromVpc.Region;
-        $.data.toRegion = toVpc.Region;
 
         let res1 = await fromEc2.describeNetworkInterfaces({
           Filters: [
@@ -143,6 +143,8 @@ steps:
 
       // check ip in cidr, when get eni info
       if ($.data.ipInCidr($.data.fromIp, $.data.srcVpc.CidrBlock)) {
+        $.data.fromRegion = $.data.srcVpc.Region;
+        $.data.toRegion = $.data.destVpc.Region;
         // fromIp in src vpc
         if ($.data.ipInCidr($.data.toIp, $.data.destVpc.CidrBlock)) {
           // toIp in dest vpc
@@ -158,8 +160,10 @@ steps:
           );
         }
       } else if ($.data.ipInCidr($.data.fromIp, $.data.destVpc.CidrBlock)) {
+        $.data.fromRegion = $.data.destVpc.Region;
+        $.data.toRegion = $.data.srcVpc.Region;
         // fromIp in dest vpc
-        if ($.data.ipInCidr($.data.toIp, $.data.destVpc.CidrBlock)) {
+        if ($.data.ipInCidr($.data.toIp, $.data.srcVpc.CidrBlock)) {
           // toIp in src vpc
           await applyEni(
             $.data.destEc2,
@@ -211,41 +215,21 @@ steps:
       `;
   - name: Check subnet route table.
     js: |
-      let getSubnetRouteTable = async ({ ec2, subnetId, vpcId }) => {
-        let res;
-        // find route table by subnet id
-        res = await ec2.describeRouteTables({
-          Filters: [{ Name: "association.subnet-id", Values: [subnetId] }],
-        });
-
-        if (res.RouteTables.length !== 0) {
-          // route table explicitly associated with the subnet
-          return res.RouteTables[0];
-        } else {
-          // use VPC main route table
-          res = await ec2.describeRouteTables({
-            Filters: [{ Name: "vpc-id", Values: [vpcId] }],
-          });
-
-          let routeTableId = $.jp.query(
-            res,
-            "$..Associations[?(@.Main)].RouteTableId"
-          )[0];
-          return $.jp.query(
-            res,
-            `$..RouteTables[?(@.RouteTableId=='${routeTableId}')]`
-          )[0];
-        }
-      };
+      let window = await $.import(
+        "https://unpkg.com/awsome-doctor-utils@0.1.0/dist/bundle.js"
+      );
+      $.data.utils = window.awsomeUtils;
 
       // get route table
-      let fromRt = await getSubnetRouteTable({
+      let fromRt = await $.data.utils.vpc.getSubnetRouteTable({
         ec2: $.data.fromEc2,
+        jp: $.jp,
         subnetId: $.data.fromEni.SubnetId,
         vpcId: $.data.fromEni.VpcId,
       });
-      let toRt = await getSubnetRouteTable({
+      let toRt = await $.data.utils.vpc.getSubnetRouteTable({
         ec2: $.data.toEc2,
+        jp: $.jp,
         subnetId: $.data.toEni.SubnetId,
         vpcId: $.data.toEni.VpcId,
       });
@@ -307,27 +291,9 @@ steps:
       `;
   - name: Check security group inbound rules.
     js: >
-      $.data.checkPort = async ({
-        ec2,
-        direction,
-        securityGroupIds,
-        protocol,
-        port,
-      }) => {
-        let res = await ec2.describeSecurityGroups({
-          GroupIds: securityGroupIds,
-        });
-
-        return {
-          anyTrafficPeer: $.utils.sg.getPeer({ $, res, direction, protocol: "-1" }),
-          peer: $.utils.sg.getPeer({ $, res, direction, protocol, port }),
-          res,
-        };
-      };
-
-
-      let result = await $.data.checkPort({
+      let result = await $.data.utils.sg.checkPort({
         ec2: $.data.toEc2,
+        jp: $.jp,
         direction: "in",
         securityGroupIds: $.data.toSg,
         protocol: $.data.protocol,
@@ -389,8 +355,9 @@ steps:
       $.err += `Security group ids: ${$.data.toSg.join(", ")}`;
   - name: Check security group outbound rules.
     js: >
-      let result = await $.data.checkPort({
+      let result = await $.data.utils.sg.checkPort({
         ec2: $.data.fromEc2,
+        jp: $.jp,
         direction: "out",
         securityGroupIds: $.data.fromSg,
         protocol: $.data.protocol,
