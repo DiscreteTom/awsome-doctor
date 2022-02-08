@@ -131,6 +131,13 @@ let res = await $.aws.ec2.describeInstanceStatus({
   InstanceIds: [$.data.instanceId],
 });
 
+// wrap existing AWS client using helper
+let _ec2 = new $.AWS.EC2(config);
+let ec2 = $.aws.wrap(_ec2);
+let res = await ec2.describeInstanceStatus({
+  InstanceIds: [$.data.instanceId],
+});
+
 // http request
 let res = await $.axios.get("https://examples.com");
 
