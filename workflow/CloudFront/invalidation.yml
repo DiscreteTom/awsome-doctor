@@ -8,12 +8,15 @@ input:
   - label: Distribution ID
     placeholder: 'Example: EDFDVBD6EXAMPLE'
     store: distributionId
+    type: text
   - label: Invalidation Request ID
     placeholder: 'Example: I2J0I21PCUYOIK '
     store: invalidationId
+    type: text
   - label: File URL
     placeholder: https://example.com/some-path/index.html
     store: url
+    type: text
 steps:
   - name: Check invalidation.
     js: |
