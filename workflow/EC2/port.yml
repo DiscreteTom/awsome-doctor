@@ -11,12 +11,15 @@ input:
   - label: Instance ID
     placeholder: i-01234567891234567
     store: instanceId
+    type: text
   - label: Protocol
     placeholder: tcp / udp / icmp
     store: protocol
+    type: text
   - label: Port
     placeholder: 0-65535
     store: port
+    type: text
 steps:
   - name: Instance status check.
     js: |
@@ -63,8 +66,14 @@ steps:
       `);
   - name: Check security group inbound rules.
     js: |
-      let result = await $.utils.sg.checkPort({
-        $,
+      let window = await $.import(
+        "https://unpkg.com/awsome-doctor-utils@0.1.0/dist/bundle.js"
+      );
+      $.data.utils = window.awsomeUtils;
+
+      let result = await $.data.utils.sg.checkPort({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         direction: "in",
         securityGroupIds: $.data.securityGroupIds,
         protocol: $.data.protocol,
@@ -102,8 +111,9 @@ steps:
       }
   - name: Check route table Internet Gateway.
     js: |
-      let res = await $.utils.vpc.checkSubnetIgw({
-        $,
+      let res = await $.data.utils.vpc.checkSubnetIgw({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         subnetId: $.data.subnetId,
         vpcId: $.data.vpcId,
       });
@@ -121,15 +131,17 @@ steps:
       }
   - name: Check network ACL.
     js: |
-      let inbound = await $.utils.vpc.checkSubnetNacl({
-        $,
+      let inbound = await $.data.utils.vpc.checkSubnetNacl({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         subnetId: $.data.subnetId,
         direction: "in",
         protocol: $.data.protocol,
         port: $.data.port,
       });
-      let outbound = await $.utils.vpc.checkSubnetNacl({
-        $,
+      let outbound = await $.data.utils.vpc.checkSubnetNacl({
+        ec2: $.aws.ec2,
+        jp: $.jp,
         subnetId: $.data.subnetId,
         direction: "out",
         protocol: $.data.protocol,
