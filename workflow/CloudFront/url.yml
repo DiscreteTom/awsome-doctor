@@ -1,0 +1,133 @@
+title: URL is not accessible.
+description: ''
+data:
+  distributionId: ''
+  url: ''
+  distribution: null
+input:
+  - label: Distribution ID
+    type: text
+    placeholder: 'Example: EDFDVBD6EXAMPLE'
+    store: distributionId
+  - label: URL of Your File
+    type: text
+    placeholder: https://example.com/index.html
+    store: url
+steps:
+  - name: Retrieve Distribution Info
+    js: >
+      let res = await $.aws.cloudfront.getDistribution({ Id:
+      $.data.distributionId });
+
+
+      $.data.distribution = $.jp.query(res, `$..Distribution`)[0];
+
+
+      $.ok = `/md
+
+      ARN: \`${$.data.distribution.ARN}\`
+
+      `;
+  - name: Check Status
+    js: |
+      if ($.data.distribution.Status !== "Deployed")
+        $.panic(
+          `Distribution not in 'Deployed' status. Current status: ${$.data.distribution.Status} .`
+        );
+
+      $.ok = "Status is Deployed";
+  - name: Check Domain Name
+    js: |
+      let url = new URL($.data.url);
+
+      // check cloudfront domain name
+      let domainName = $.data.distribution.DomainName;
+      if (domainName == url.host) {
+        if (domainName.endsWith(".cn")) {
+          $.panic(
+            `You have to use your own domain name in AWS China. Current domain name: ${domainName}`
+          );
+        }
+      } else {
+        // using custom domain name
+        let customDomainNames = $.jp.query(
+          $.data.distribution,
+          `$..DistributionConfig.Aliases.Items[*]`
+        );
+        if (customDomainNames.length === 0 || !customDomainNames.includes(url.host))
+          $.panic(
+            `Domain name mismatch. Maybe you need to add an alternative domain name.`
+          );
+        domainName = url.host;
+
+        // check ICP recordal
+        if (
+          $.jp.query(
+            $.data.distribution,
+            `$..AliasICPRecordals[?(@.CNAME=='${domainName}' && @.ICPRecordalStatus=='APPROVED')]`
+          ).length === 0
+        )
+          $.panic(`ICP recordal not approved. Please contact AWS support.`);
+
+        $.info += `You are using a custom domain name ${domainName}. Please check you have the right DNS record. `;
+      }
+
+      // check whether domain name is one of the origin
+      if (
+        $.jp
+          .query($.data.distribution, `$..Origins.Items[*].DomainName`)
+          .includes(domainName)
+      ) {
+        $.info += `The domain name ${domainName} is one of the origin domain name, which might be a wrong configuration. `;
+      }
+
+      if ($.info.length === 0) $.done("OK");
+  - name: Check Root Object
+    js: |
+      let url = new URL($.data.url);
+
+      if (
+        url.pathname === "/" &&
+        !$.data.distribution.DistributionConfig.DefaultRootObject
+      ) {
+        $.info = `You are accessing the root object, but you did not set the default root object of this distribution.`;
+      } else {
+        $.done("You are not accessing the root object.");
+      }
+  - name: Check S3 OAI
+    js: >
+      let s3origins = [];
+
+      let withoutOAI = [];
+
+      $.data.distribution.DistributionConfig.Origins.Items.map((i) => {
+        let parts = i.DomainName.split(".").slice(-5);
+        if (
+          (i.DomainName.endsWith(".amazonaws.com") &&
+            (parts[1] == "s3" || parts[2] == "s3")) ||
+          (i.DomainName.endsWith(".amazonaws.com.cn") &&
+            (parts[0] == "s3" || parts[1] == "s3"))
+        ) {
+          s3origins.push(i.DomainName);
+          if (!i.S3OriginConfig?.OriginAccessIdentity) {
+            withoutOAI.push(i.DomainName);
+          }
+        }
+      });
+
+
+      if (s3origins.length === 0) $.done("No S3 origin.");
+
+
+      $.info = `/md
+
+      Found S3 origins:
+
+      ${s3origins
+        .map((o) => `- ${o} ${withoutOAI.includes(o) ? "" : "(with OAI)"}`)
+        .join("\n")}
+
+      Please check this distribution can access those S3 bucket, and OAI is
+      correctly configured in S3 policy.
+
+      `;
