@@ -127,7 +127,7 @@ steps:
         .map((o) => `- ${o} ${withoutOAI.includes(o) ? "" : "(with OAI)"}`)
         .join("\n")}
 
-      Please check this distribution can access those S3 bucket, and OAI is
-      correctly configured in S3 policy.
+      Please check this distribution can access those S3 bucket (for example, S3
+      is public accessible), or OAIs are correctly configured in S3 policy.
 
       `;
