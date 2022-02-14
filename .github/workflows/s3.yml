@@ -60,7 +60,7 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v1
         with:
           role-to-assume: arn:aws:iam::241779123978:role/awsome-doctor-s3-writer
-        aws-region: us-east-1
+          aws-region: us-east-1
 
       - name: Copy dist to S3
         run: |
