@@ -1,9 +1,12 @@
-name: Github Pages
+name: Amazon S3
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+permissions:
+  id-token: write
+  contents: read
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -51,11 +54,14 @@ jobs:
           cp -r content/* awsome-doctor-view
           cd awsome-doctor-view
           yarn install
-          yarn generate:gh-pages
+          yarn generate
 
-      - name: deploy
-        uses: peaceiris/actions-gh-pages@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: awsome-doctor-view/dist
+          role-to-assume: arn:aws:iam::241779123978:role/awsome-doctor-s3-writer
+        aws-region: us-east-1
+
+      - name: Copy dist to S3
+        run: |
+          aws s3 cp awsome-doctor-view/dist s3://awsome-doctor --recursive
