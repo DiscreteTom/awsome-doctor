@@ -86,11 +86,11 @@ steps:
     js: |
       let url = new URL($.data.url);
 
-      if (
-        url.pathname === "/" &&
-        !$.data.distribution.DistributionConfig.DefaultRootObject
-      ) {
-        $.info = `You are accessing the root object, but you did not set the default root object of this distribution.`;
+      if (url.pathname === "/") {
+        if (!$.data.distribution.DistributionConfig.DefaultRootObject)
+          $.info = `You are accessing the root object, but you did not set the default root object of this distribution.`;
+        else
+          $.info = `Your request will access the default root object: ${$.data.distribution.DistributionConfig.DefaultRootObject} .`;
       } else {
         $.done("You are not accessing the root object.");
       }
